@@ -1,0 +1,110 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'android/**'
+      - 'janus-android/**'
+      - 'janus-core/**'
+      - 'janus-runtime/**'
+      - 'web/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - '.github/workflows/build-apk.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'janus-android/**'
+      - 'janus-core/**'
+      - 'janus-runtime/**'
+      - 'web/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.gradle'
+      - 'settings.gradle'
+  tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Rust Android targets
+        run: |
+          rustup target add aarch64-linux-android x86_64-linux-android
+          cargo install cargo-ndk --locked
+
+      - name: Locate the preinstalled Android NDK
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-$(ls -d "$ANDROID_SDK_ROOT"/ndk/* | tail -1)}"
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "Using NDK at $NDK"
+
+      - name: Build libjanus_android.so
+        run: |
+          # The engine is a Rust cdylib linked into the app; without it the APK
+          # installs but reports "engine library unavailable".
+          cargo ndk -t arm64-v8a -t x86_64 -o app/build/janusJniLibs build --release -p janus-android
+          for abi in arm64-v8a x86_64; do
+            test -f "app/build/janusJniLibs/$abi/libjanus_android.so" \
+              || { echo "missing $abi library"; exit 1; }
+          done
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+
+      - name: Build debug and release APKs
+        run: |
+          gradle :app:assembleDebug :app:assembleRelease --no-daemon \
+            -PjanusRustAbi=arm64-v8a -PjanusFullCatalogue=false
+
+      - name: Verify the APK contains the engine
+        run: |
+          for apk in app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk; do
+            echo "== $apk"
+            unzip -l "$apk" | grep -q 'lib/arm64-v8a/libjanus_android.so' \
+              || { echo "$apk does not contain the engine library"; exit 1; }
+            unzip -l "$apk" | grep -q 'assets/web/index.html' \
+              || { echo "$apk does not contain the dashboard"; exit 1; }
+          done
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: janus-os-android-debug
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: janus-os-android-release
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 90
+
+      - name: Attach APKs to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
