@@ -24,20 +24,20 @@ voice.profiles = {
 
 -- ─── EMOTION VOICE MODIFIERS ──────────────────────────────────────────────────
 voice.emotion_mods = {
-    curious    = { speed_mod=0,   pitch_mod=+5,  amp_mod=0   },
+    curious    = { speed_mod=0,   pitch_mod=5,  amp_mod=0   },
     focused    = { speed_mod=-10, pitch_mod=-5,  amp_mod=-10 },
-    alert      = { speed_mod=+20, pitch_mod=+10, amp_mod=+15 },
-    excited    = { speed_mod=+25, pitch_mod=+15, amp_mod=+15 },
+    alert      = { speed_mod=20, pitch_mod=10, amp_mod=15 },
+    excited    = { speed_mod=25, pitch_mod=15, amp_mod=15 },
     tired      = { speed_mod=-25, pitch_mod=-10, amp_mod=-20 },
     satisfied  = { speed_mod=-5,  pitch_mod=0,   amp_mod=-5  },
-    concerned  = { speed_mod=+5,  pitch_mod=+5,  amp_mod=+5  },
-    proud      = { speed_mod=0,   pitch_mod=-5,  amp_mod=+10 },
+    concerned  = { speed_mod=5,  pitch_mod=5,  amp_mod=5  },
+    proud      = { speed_mod=0,   pitch_mod=-5,  amp_mod=10 },
     bored      = { speed_mod=-20, pitch_mod=-15, amp_mod=-25 },
-    playful    = { speed_mod=+15, pitch_mod=+20, amp_mod=+10 },
-    protective = { speed_mod=+10, pitch_mod=-8,  amp_mod=+20 },
+    playful    = { speed_mod=15, pitch_mod=20, amp_mod=10 },
+    protective = { speed_mod=10, pitch_mod=-8,  amp_mod=20 },
     melancholic= { speed_mod=-20, pitch_mod=-10, amp_mod=-20 },
-    loving     = { speed_mod=-10, pitch_mod=+10, amp_mod=-5  },
-    determined = { speed_mod=+5,  pitch_mod=-5,  amp_mod=+15 },
+    loving     = { speed_mod=-10, pitch_mod=10, amp_mod=-5  },
+    determined = { speed_mod=5,  pitch_mod=-5,  amp_mod=15 },
 }
 
 -- ─── STATE ────────────────────────────────────────────────────────────────────

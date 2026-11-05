@@ -1,4 +1,4 @@
-// src/lua/ai_manager_enhanced.lua
+-- src/lua/ai_manager_enhanced.lua
 -- Enhanced Overseer AI with tiered offline/online mode and voice synthesis
 
 local ai_manager = {}

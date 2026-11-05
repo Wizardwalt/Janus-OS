@@ -4,12 +4,18 @@
 
 class JanusRuntimeApi {
   constructor() {
-    this.baseUrl = localStorage.getItem('janus.runtimeUrl') || 'http://localhost:8080';
+    // The browser is NOT the host running the runtime. A hardcoded
+    // http://localhost:8080 target fails on Replit/any remote deployment and is
+    // blocked as mixed content over HTTPS. Default to the same origin and let
+    // the dashboard server proxy /runtime-api/* to the runtime daemon.
+    this.baseUrl = localStorage.getItem('janus.runtimeUrl') || '/runtime-api';
     this.token = sessionStorage.getItem('janus.sessionToken') || null;
   }
 
   setBaseUrl(url) {
-    this.baseUrl = url.replace(/\/$/, '');
+    const value = (url || '').trim().replace(/\/$/, '');
+    // Empty means "same origin through the dashboard proxy".
+    this.baseUrl = value || '/runtime-api';
     localStorage.setItem('janus.runtimeUrl', this.baseUrl);
   }
 

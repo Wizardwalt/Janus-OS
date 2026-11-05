@@ -133,23 +133,49 @@ fn collect_lua_paths(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// Extract the JSON text of a `--[{ ... }]` manifest block.
+///
+/// A bare `--[{` only comments its own line in Lua, so the remaining JSON lines
+/// must each carry a `--` prefix for the file to still compile. This reader
+/// accepts both the fully commented form and the older uncommented form, and
+/// strips the comment markers before parsing.
+fn extract_manifest_json(code: &str) -> Option<String> {
+    let mut lines = code.lines();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_start();
+        let Some(after_marker) = trimmed.strip_prefix("--[") else {
+            continue;
+        };
+        if !after_marker.starts_with('{') {
+            continue;
+        }
+
+        // Single-line manifest.
+        if let Some(end) = after_marker.find("}]") {
+            return Some(after_marker[..end + 1].to_string());
+        }
+
+        let mut collected = String::from(after_marker);
+        collected.push('\n');
+        for line in lines.by_ref() {
+            let trimmed = line.trim_start();
+            let content = trimmed.strip_prefix("--").unwrap_or(trimmed);
+            if let Some(end) = content.find("}]") {
+                collected.push_str(&content[..end + 1]);
+                return Some(collected);
+            }
+            collected.push_str(content);
+            collected.push('\n');
+        }
+    }
+    None
+}
+
 /// Extract plugin manifest from Lua code comments
 fn extract_manifest_from_lua(code: &str, path: &Path) -> Result<PluginManifest> {
-    // Look for JSON metadata in Lua comments
-    for line in code.lines() {
-        if line.trim().starts_with("--[") {
-            // Try to extract JSON from block comment
-            let start = code.find("--[").unwrap_or(0);
-            let json_start = start + 3;
-            // Lua metadata blocks end with `}]`; searching for a bare `]`
-            // incorrectly stops at JSON arrays such as `capabilities`.
-            if let Some(relative_end) = code[json_start..].find("}]") {
-                let json_end = json_start + relative_end + 1;
-                let json_str = &code[json_start..json_end];
-                if let Ok(manifest) = serde_json::from_str::<PluginManifest>(json_str) {
-                    return Ok(manifest);
-                }
-            }
+    if let Some(json) = extract_manifest_json(code) {
+        if let Ok(manifest) = serde_json::from_str::<PluginManifest>(&json) {
+            return Ok(manifest);
         }
     }
 
@@ -199,5 +225,58 @@ print("Plugin loaded")
         let manifest = extract_manifest_from_lua(code, Path::new("test_plugin.lua")).unwrap();
         assert_eq!(manifest.id, "test_plugin");
         assert_eq!(manifest.priority, 50);
+    }
+
+    #[test]
+    fn parses_a_manifest_whose_every_line_is_commented() {
+        // This is the only form that is also valid Lua: `--[{` alone would leave
+        // the JSON body uncommented and the module would fail to compile.
+        let code = r#"--[{
+--  "id": "evidence.hash",
+--  "name": "Evidence Hash",
+--  "version": "1.0.0",
+--  "description": "Read-only hashing",
+--  "author": "Janus",
+--  "priority": 10,
+--  "capabilities": ["storage:file_system"],
+--  "category": "evidence_readonly",
+--  "status": "production"
+--}]
+
+function execute() return 1 end
+"#;
+        let manifest = extract_manifest_from_lua(code, Path::new("evidence_hash.lua")).unwrap();
+        assert_eq!(manifest.id, "evidence.hash");
+        assert_eq!(manifest.priority, 10);
+        assert_eq!(manifest.category, "evidence_readonly");
+        assert_eq!(manifest.capabilities, vec!["storage:file_system".to_string()]);
+    }
+
+    #[test]
+    fn falls_back_to_a_filename_manifest_when_no_block_exists() {
+        let manifest =
+            extract_manifest_from_lua("print('hi')", Path::new("some_module.lua")).unwrap();
+        assert_eq!(manifest.id, "some_module");
+        assert_eq!(manifest.status, "prototype");
+    }
+
+    #[test]
+    fn shipped_read_only_evidence_manifests_are_parseable() {
+        for (file, expected_id) in [
+            ("evidence_hash.lua", "evidence.hash"),
+            ("evidence_stat.lua", "evidence.stat"),
+            ("evidence_list.lua", "evidence.list"),
+        ] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../plugins/evidence_readonly")
+                .join(file);
+            let code = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {}", path.display(), error));
+            let manifest = extract_manifest_from_lua(&code, &path)
+                .unwrap_or_else(|error| panic!("cannot parse {}: {}", file, error));
+            assert_eq!(manifest.id, expected_id, "wrong id for {}", file);
+            assert_eq!(manifest.status, "production");
+            assert_eq!(manifest.category, "evidence_readonly");
+        }
     }
 }

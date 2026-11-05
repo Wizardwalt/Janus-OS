@@ -14,7 +14,11 @@ let currentCategory = null;
 let opsCount = 0;
 
 function connectWS() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  // Replit (and any TLS reverse proxy) serves the dashboard over HTTPS.
+  // A hardcoded ws:// target is blocked as mixed content, so the launcher
+  // would never connect. Derive the scheme from the page instead.
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${scheme}//${location.host}/ws`);
   ws.onopen    = () => { wsReady = true; };
   ws.onmessage = (e) => { try { handleWsMessage(JSON.parse(e.data)); } catch(ex) {} };
   ws.onclose   = () => { wsReady = false; setTimeout(connectWS, 2000); };
@@ -27,6 +31,9 @@ function wsSend(obj) {
 
 function handleWsMessage(msg) {
   switch (msg.type) {
+    case 'server_status':
+      applyServerStatus(msg);
+      break;
     case 'aria_thought':
       updateAriaThought(msg.text);
       setAriaMood(moodFromText(msg.text));
@@ -51,6 +58,30 @@ function handleWsMessage(msg) {
       finishModule(true, msg.text);
       break;
   }
+}
+
+// ─── Execution Mode Banner ─────────────────────────────────────────────────────
+// The dashboard must never imply that simulated output is a real operation.
+// This banner states the server's actual mode on every connect.
+function applyServerStatus(status) {
+  window.janusServerStatus = status;
+  let banner = document.getElementById('janus-mode-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'janus-mode-banner';
+    banner.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:10001',
+      'padding:6px 12px', 'font:11px/1.5 monospace', 'text-align:center',
+      'letter-spacing:0.3px', 'pointer-events:none',
+    ].join(';');
+    document.body.appendChild(banner);
+  }
+  const demo = Boolean(status.demo_mode);
+  banner.textContent = status.execution_notice
+    || (demo ? 'DEMO MODE: simulated output only.' : 'PRODUCTION MODE: simulated execution disabled.');
+  banner.style.background = demo ? '#3a2a00' : '#04170c';
+  banner.style.color = demo ? '#ffcc55' : '#7dffab';
+  banner.style.borderBottom = `1px solid ${demo ? '#ffcc55' : '#00ff41'}`;
 }
 
 function moodFromText(text = '') {

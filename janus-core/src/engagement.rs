@@ -53,10 +53,17 @@ impl Engagement {
         self.active && now >= self.starts_at && now < self.ends_at
     }
 
-    pub fn authorizes(&self, feature: &LicensedFeature, asset: &str, now: DateTime<Utc>) -> bool {
+    /// Whether this engagement authorizes `feature` against `target` right now.
+    ///
+    /// A target may be either an approved asset (host/IP) or an approved evidence
+    /// path. Read-only evidence collection targets a filesystem location, so
+    /// requiring it to also appear in `approved_assets` would make the evidence
+    /// scope unusable. Both lists are explicit customer approvals and are matched
+    /// exactly; the requested feature must still be approved separately.
+    pub fn authorizes(&self, feature: &LicensedFeature, target: &str, now: DateTime<Utc>) -> bool {
         self.is_active_at(now)
             && self.scope.permits_feature(feature)
-            && self.scope.permits_asset(asset)
+            && (self.scope.permits_asset(target) || self.scope.permits_evidence_path(target))
     }
 }
 
@@ -93,5 +100,70 @@ mod tests {
             now,
         ));
         assert!(!engagement.authorizes(&LicensedFeature::Forensics, "diagnostic.example.com", now,));
+    }
+
+    #[test]
+    fn an_approved_evidence_path_is_a_valid_target_for_read_only_collection() {
+        let now = Utc::now();
+        let engagement = Engagement {
+            id: "eng_2".into(),
+            organization_id: "org_1".into(),
+            authorization_reference: "AUTH-2".into(),
+            starts_at: now - Duration::hours(1),
+            ends_at: now + Duration::hours(1),
+            active: true,
+            scope: EngagementScope {
+                approved_assets: vec![],
+                approved_evidence_paths: vec!["/evidence/case-1".into()],
+                approved_features: vec![LicensedFeature::Forensics],
+            },
+        };
+
+        assert!(engagement.authorizes(&LicensedFeature::Forensics, "/evidence/case-1", now));
+        assert!(!engagement.authorizes(&LicensedFeature::Forensics, "/evidence/case-2", now));
+        // An evidence path does not grant an unapproved feature.
+        assert!(!engagement.authorizes(
+            &LicensedFeature::NetworkDiagnostics,
+            "/evidence/case-1",
+            now
+        ));
+    }
+
+    #[test]
+    fn an_inactive_or_expired_engagement_authorizes_nothing() {
+        let now = Utc::now();
+        let mut engagement = Engagement {
+            id: "eng_3".into(),
+            organization_id: "org_1".into(),
+            authorization_reference: "AUTH-3".into(),
+            starts_at: now - Duration::hours(1),
+            ends_at: now + Duration::hours(1),
+            active: false,
+            scope: EngagementScope {
+                approved_assets: vec![],
+                approved_evidence_paths: vec!["/evidence/case-1".into()],
+                approved_features: vec![LicensedFeature::Forensics],
+            },
+        };
+        assert!(!engagement.authorizes(&LicensedFeature::Forensics, "/evidence/case-1", now));
+
+        engagement.active = true;
+        engagement.ends_at = now - Duration::minutes(1);
+        assert!(!engagement.authorizes(&LicensedFeature::Forensics, "/evidence/case-1", now));
+    }
+
+    #[test]
+    fn asset_matching_is_exact_not_prefix_based() {
+        let scope = EngagementScope {
+            approved_assets: vec!["10.0.0.1".into()],
+            approved_evidence_paths: vec!["/evidence/case-1".into()],
+            approved_features: vec![LicensedFeature::Forensics],
+        };
+        assert!(scope.permits_asset("10.0.0.1"));
+        assert!(!scope.permits_asset("10.0.0.10"));
+        assert!(!scope.permits_asset("10.0.0.1.evil.example"));
+        assert!(scope.permits_evidence_path("/evidence/case-1"));
+        assert!(!scope.permits_evidence_path("/evidence/case-1/secret"));
+        assert!(!scope.permits_evidence_path("/evidence/case-1/../case-2"));
     }
 }

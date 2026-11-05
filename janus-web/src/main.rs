@@ -4,7 +4,7 @@ use axum::{
         State,
     },
     response::IntoResponse,
-    routing::get,
+    routing::{any, get},
     Router,
 };
 use mlua::prelude::*;
@@ -44,6 +44,8 @@ struct GuiState {
     module_registry: Arc<HashMap<String, Vec<ModuleInfo>>>,
     /// The legacy Lua runner is available only when demo mode is explicitly enabled.
     demo_mode: bool,
+    /// Repository root that module paths and static assets resolve against.
+    root: Arc<std::path::PathBuf>,
 }
 
 #[derive(Clone, Serialize)]
@@ -104,12 +106,227 @@ fn ws_msg(msg_type: &str, line: Option<String>, text: Option<String>) -> String 
     .unwrap()
 }
 
+// ─── Runtime API Reverse Proxy ────────────────────────────────────────────────
+
+/// Same-origin bridge from the dashboard to the authenticated runtime daemon.
+///
+/// This is a transport only. It forwards the `Authorization` header untouched
+/// and never injects credentials, so every license, engagement, role, and
+/// certification check still happens in `janus-runtime`.
+mod proxy {
+    use axum::{
+        body::{Body, Bytes},
+        extract::{OriginalUri, Path},
+        http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
+        response::Response,
+        Extension,
+    };
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    pub struct RuntimeTarget(pub Arc<String>);
+
+    /// Headers that must not be copied across the hop-by-hop boundary.
+    fn is_hop_by_hop(name: &str) -> bool {
+        matches!(
+            name,
+            "connection"
+                | "keep-alive"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+                | "te"
+                | "trailers"
+                | "transfer-encoding"
+                | "upgrade"
+                | "host"
+                | "content-length"
+        )
+    }
+
+    /// One pooled client for the process instead of a new connection pool per request.
+    fn client() -> &'static reqwest::Client {
+        static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+        CLIENT.get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default()
+        })
+    }
+
+    pub async fn forward_root(
+        Extension(target): Extension<RuntimeTarget>,
+        method: Method,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        send(&target.0, "", None, method, headers, body).await
+    }
+
+    pub async fn forward(
+        Extension(target): Extension<RuntimeTarget>,
+        Path(path): Path<String>,
+        OriginalUri(uri): OriginalUri,
+        method: Method,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        send(
+            &target.0,
+            &path,
+            uri.query(),
+            method,
+            headers,
+            body,
+        )
+        .await
+    }
+
+    async fn send(
+        target: &str,
+        path: &str,
+        query: Option<&str>,
+        method: Method,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        let mut url = format!("{}/{}", target.trim_end_matches('/'), path);
+        if let Some(query) = query {
+            url.push('?');
+            url.push_str(query);
+        }
+
+        let reqwest_method =
+            reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
+        let mut request = client().request(reqwest_method, &url);
+
+        // reqwest 0.11 speaks `http` 0.2 while axum 0.7 speaks `http` 1.x, so the
+        // header types are distinct. Rebuild them by name/value bytes.
+        let mut forwarded = reqwest::header::HeaderMap::new();
+        for (name, value) in headers.iter() {
+            if is_hop_by_hop(name.as_str()) {
+                continue;
+            }
+            if let (Ok(n), Ok(v)) = (
+                reqwest::header::HeaderName::from_bytes(name.as_ref()),
+                reqwest::header::HeaderValue::from_bytes(value.as_ref()),
+            ) {
+                forwarded.append(n, v);
+            }
+        }
+        request = request.headers(forwarded).body(body.to_vec());
+
+        match request.send().await {
+            Ok(upstream) => {
+                let status =
+                    StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+                let mut builder = Response::builder().status(status);
+                for (name, value) in upstream.headers().iter() {
+                    if is_hop_by_hop(name.as_str()) {
+                        continue;
+                    }
+                    if let (Ok(n), Ok(v)) = (
+                        HeaderName::from_bytes(name.as_ref()),
+                        HeaderValue::from_bytes(value.as_ref()),
+                    ) {
+                        builder = builder.header(n, v);
+                    }
+                }
+                let bytes = upstream.bytes().await.unwrap_or_default();
+                builder
+                    .body(Body::from(bytes))
+                    .unwrap_or_else(|_| Response::new(Body::empty()))
+            }
+            Err(error) => {
+                // The runtime is a separate process. Report its absence honestly
+                // instead of implying the platform is operational.
+                let message = serde_json::json!({
+                    "status": "error",
+                    "data": null,
+                    "error": format!(
+                        "Janus runtime is not reachable at {}. Start it with `cargo run --bin janus-runtime`. ({})",
+                        target, error
+                    ),
+                });
+                Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(message.to_string()))
+                    .unwrap_or_else(|_| Response::new(Body::empty()))
+            }
+        }
+    }
+}
+
+// ─── Project Root Resolution ──────────────────────────────────────────────────
+
+/// Resolve the repository root that holds `web/`, `plugins/`, and `modules/`.
+///
+/// The original code used paths relative to the process working directory, so
+/// `cargo run` only worked when launched from the repository root and the
+/// release binary served an empty dashboard from anywhere else. Resolution
+/// order: explicit `JANUS_ROOT`, then the working directory and its ancestors,
+/// then the compile-time manifest directory, then the executable's ancestors.
+fn resolve_root() -> std::path::PathBuf {
+    use std::path::{Path, PathBuf};
+
+    fn looks_like_root(dir: &Path) -> bool {
+        dir.join("web").join("index.html").is_file() && dir.join("plugins").is_dir()
+    }
+
+    if let Ok(explicit) = std::env::var("JANUS_ROOT") {
+        let path = PathBuf::from(explicit);
+        if looks_like_root(&path) {
+            return path;
+        }
+        eprintln!(
+            "[GUI] JANUS_ROOT={} does not contain web/index.html and plugins/; ignoring",
+            path.display()
+        );
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        for candidate in cwd.ancestors() {
+            if looks_like_root(candidate) {
+                return candidate.to_path_buf();
+            }
+        }
+    }
+
+    let manifest_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.to_path_buf());
+    if let Some(path) = manifest_root {
+        if looks_like_root(&path) {
+            return path;
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        for candidate in exe.ancestors().skip(1) {
+            if looks_like_root(candidate) {
+                return candidate.to_path_buf();
+            }
+        }
+    }
+
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
 // ─── Module Registry ──────────────────────────────────────────────────────────
 
-fn build_module_registry() -> HashMap<String, Vec<ModuleInfo>> {
+/// Per-category module ceiling. The previous hard cap of 200 silently hid
+/// thousands of installed modules; this bound only exists to keep a pathological
+/// directory from exhausting memory.
+const MAX_MODULES_PER_CATEGORY: usize = 5000;
+
+fn build_module_registry(root: &std::path::Path) -> HashMap<String, Vec<ModuleInfo>> {
     let mut map: HashMap<String, Vec<ModuleInfo>> = HashMap::new();
 
     let categories = vec![
+        // plugins/ root-level numbered suite. These 200+ files previously
+        // belonged to no category and were unreachable from the launcher.
+        ("omega_core", "plugins"),
         // plugins/
         ("forensics", "plugins/forensics"),
         ("cyber_warfare", "plugins/cyber_warfare"),
@@ -143,7 +360,8 @@ fn build_module_registry() -> HashMap<String, Vec<ModuleInfo>> {
 
     for (cat, dir) in categories {
         let mut mods = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(dir) {
+        let absolute_dir = root.join(dir);
+        if let Ok(entries) = std::fs::read_dir(&absolute_dir) {
             let mut files: Vec<_> = entries
                 .filter_map(|e| e.ok())
                 .filter(|e| {
@@ -160,7 +378,7 @@ fn build_module_registry() -> HashMap<String, Vec<ModuleInfo>> {
                 })
                 .collect();
             files.sort_by_key(|e| e.file_name());
-            for entry in files.iter().take(200) {
+            for entry in files.iter().take(MAX_MODULES_PER_CATEGORY) {
                 let fname = entry.file_name();
                 let name = fname.to_string_lossy();
                 let base = name.trim_end_matches(".lua").to_string();
@@ -239,7 +457,7 @@ fn read_module_desc(path: &std::path::Path) -> String {
 
 // ─── Lua Execution Engine ─────────────────────────────────────────────────────
 
-fn run_lua_module_file(file_path: &str, category: &str) -> Vec<String> {
+fn run_lua_module_file(root: &std::path::Path, file_path: &str, category: &str) -> Vec<String> {
     let module_name = file_path
         .split('/')
         .last()
@@ -247,7 +465,23 @@ fn run_lua_module_file(file_path: &str, category: &str) -> Vec<String> {
         .trim_end_matches(".lua");
     let display = humanize(module_name);
 
-    let lua_src = match std::fs::read_to_string(file_path) {
+    // `file_path` is a repository-relative module ID supplied by the browser.
+    // Resolve it against the root and refuse anything that escapes it, so a
+    // crafted ID cannot read arbitrary files even in demo mode.
+    let resolved = root.join(file_path);
+    let canonical = match resolved.canonicalize() {
+        Ok(path) => path,
+        Err(e) => return vec![format!("[ERROR] Cannot read module: {} — {}", file_path, e)],
+    };
+    let canonical_root = match root.canonicalize() {
+        Ok(path) => path,
+        Err(e) => return vec![format!("[ERROR] Cannot resolve project root: {}", e)],
+    };
+    if !canonical.starts_with(&canonical_root) {
+        return vec![format!("[ERROR] Refusing module outside project root: {}", file_path)];
+    }
+
+    let lua_src = match std::fs::read_to_string(&canonical) {
         Ok(s) => s,
         Err(e) => return vec![format!("[ERROR] Cannot read module: {} — {}", file_path, e)],
     };
@@ -833,11 +1067,27 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<GuiState>) -> impl
 }
 
 async fn handle_socket(mut socket: WebSocket, state: GuiState) {
+    // Tell the browser which execution mode this server is actually in, so the
+    // launcher can label simulated output instead of implying real operations.
+    let module_total: usize = state.module_registry.values().map(|v| v.len()).sum();
+    let hello = serde_json::json!({
+        "type": "server_status",
+        "demo_mode": state.demo_mode,
+        "module_count": module_total,
+        "category_count": state.module_registry.len(),
+        "execution_notice": if state.demo_mode {
+            "DEMO MODE: module output is simulated. No device, file, or network operation is performed."
+        } else {
+            "PRODUCTION MODE: simulated execution is disabled. Use the authorized runtime execution panel."
+        },
+    });
+    let _ = socket.send(Message::Text(hello.to_string())).await;
+
     let _ = socket
         .send(Message::Text(ws_msg(
             "aria_thought",
             None,
-            Some("JanusOS online. All systems nominal. I'm here, Operator.".into()),
+            Some("JanusOS online. Dashboard ready.".into()),
         )))
         .await;
 
@@ -888,8 +1138,9 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
                                     let file = module.file.clone();
                                     let category = inc.category.clone();
                                     let label = module.display.clone();
+                                    let root = (*state.root).clone();
                                     let lines = tokio::task::spawn_blocking(move || {
-                                        run_lua_module_file(&file, &category)
+                                        run_lua_module_file(&root, &file, &category)
                                     }).await.unwrap_or_else(|_| {
                                         vec!["[ERROR] Module execution thread panicked.".into()]
                                     });
@@ -965,7 +1216,10 @@ async fn main() -> anyhow::Result<()> {
         ops_count: 0,
     }));
 
-    let module_registry = Arc::new(build_module_registry());
+    let root = resolve_root();
+    println!("[GUI] Project root: {}", root.display());
+
+    let module_registry = Arc::new(build_module_registry(&root));
     let total: usize = module_registry.values().map(|v| v.len()).sum();
     let demo_mode = matches!(
         std::env::var("JANUS_DEMO_MODE").as_deref(),
@@ -976,10 +1230,16 @@ async fn main() -> anyhow::Result<()> {
         total,
         module_registry.len()
     );
+    if total == 0 {
+        eprintln!(
+            "[GUI] WARNING: no modules found under {}. Set JANUS_ROOT to the repository root.",
+            root.display()
+        );
+    }
     println!(
         "[GUI] Legacy simulated module execution: {}",
         if demo_mode {
-            "DEMO ENABLED"
+            "DEMO ENABLED (simulated output, not real operations)"
         } else {
             "DISABLED"
         }
@@ -990,15 +1250,32 @@ async fn main() -> anyhow::Result<()> {
         aria_status,
         module_registry,
         demo_mode,
+        root: Arc::new(root.clone()),
     };
+
+    // The dashboard is the only browser-facing origin. Production API calls go
+    // through this same-origin proxy so the browser never needs to reach the
+    // runtime host directly (which fails on Replit and over HTTPS).
+    let runtime_target = std::env::var("JANUS_RUNTIME_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+    println!("[GUI] Runtime API proxy: /runtime-api/* → {}", runtime_target);
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
-        .fallback_service(ServeDir::new("web"))
-        .with_state(state);
+        // `/runtime-api/*path` also matches the trailing-slash form, so only the
+        // bare path is registered separately to avoid a matchit route conflict.
+        .route("/runtime-api", any(proxy::forward_root))
+        .route("/runtime-api/*path", any(proxy::forward))
+        .fallback_service(ServeDir::new(root.join("web")))
+        .with_state(state)
+        .layer(axum::Extension(proxy::RuntimeTarget(Arc::new(runtime_target))));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 5000));
-    println!("[GUI] JanusOS GUI server → http://0.0.0.0:5000");
+    let port: u16 = std::env::var("JANUS_WEB_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5000);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    println!("[GUI] JanusOS GUI server → http://0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())

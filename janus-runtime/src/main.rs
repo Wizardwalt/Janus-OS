@@ -16,6 +16,7 @@ use tracing::info;
 
 mod api;
 mod database;
+mod evidence;
 mod executor;
 mod hardware;
 mod lua;

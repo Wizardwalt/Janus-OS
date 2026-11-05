@@ -1,0 +1,15 @@
+{
+  "name": "janus-audit-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Non-Rust verification tools for Janus module certification. These complement, not replace, cargo test.",
+  "scripts": {
+    "syntax": "node check_lua_syntax.js",
+    "test:evidence": "node test_evidence_modules.js",
+    "test:sandbox": "node test_sandbox_escape.js",
+    "test": "node test_evidence_modules.js && node test_sandbox_escape.js"
+  },
+  "dependencies": {
+    "wasmoon": "1.16.0"
+  }
+}

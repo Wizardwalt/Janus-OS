@@ -447,6 +447,11 @@ impl StateManager {
     }
 
     /// Apply the complete license, engagement, target, and module certification gate.
+    ///
+    /// On success, returns the engagement's approved evidence scope. Returning it
+    /// from the authorization decision (rather than re-reading it at the call
+    /// site) guarantees execution is confined to exactly the scope that was
+    /// authorized.
     pub async fn authorize_production_execution(
         &self,
         account: &janus_core::UserAccount,
@@ -454,7 +459,7 @@ impl StateManager {
         target_asset: &str,
         module_id: &str,
         module_sha256: &str,
-    ) -> Result<()> {
+    ) -> Result<janus_core::EngagementScope> {
         let public_key = self
             .config
             .license_public_key
@@ -481,7 +486,7 @@ impl StateManager {
             target_asset,
             now: chrono::Utc::now(),
         })?;
-        Ok(())
+        Ok(engagement.scope)
     }
 
     /// Resolve an opaque session token to an active account.

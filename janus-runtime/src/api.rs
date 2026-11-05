@@ -848,7 +848,7 @@ async fn execute(
             )
         }
     };
-    if let Err(error) = state
+    let approved_scope = match state
         .state_manager
         .authorize_production_execution(
             &account,
@@ -859,26 +859,58 @@ async fn execute(
         )
         .await
     {
-        let message = error.to_string();
-        let _ = state
-            .state_manager
-            .audit_execution_event(
-                &account,
-                "EXECUTION_DENIED",
-                &req.plugin,
-                &req.target_asset,
-                Err(&message),
-            )
-            .await;
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ApiResponse {
-                status: "error".into(),
-                data: None,
-                error: Some(message),
-            }),
-        );
-    }
+        Ok(scope) => scope,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = state
+                .state_manager
+                .audit_execution_event(
+                    &account,
+                    "EXECUTION_DENIED",
+                    &req.plugin,
+                    &req.target_asset,
+                    Err(&message),
+                )
+                .await;
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse {
+                    status: "error".into(),
+                    data: None,
+                    error: Some(message),
+                }),
+            );
+        }
+    };
+
+    // Confine read-only collection to the exact paths this engagement approved.
+    let evidence_scope = match crate::evidence::EvidenceScope::new(
+        &approved_scope.approved_evidence_paths,
+    ) {
+        Ok(scope) => scope,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = state
+                .state_manager
+                .audit_execution_event(
+                    &account,
+                    "EXECUTION_DENIED",
+                    &req.plugin,
+                    &req.target_asset,
+                    Err(&message),
+                )
+                .await;
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse {
+                    status: "error".into(),
+                    data: None,
+                    error: Some(message),
+                }),
+            );
+        }
+    };
+
     let _ = state
         .state_manager
         .audit_execution_event(
@@ -890,7 +922,11 @@ async fn execute(
         )
         .await;
 
-    match state.executor.execute(&req.plugin, req.args).await {
+    match state
+        .executor
+        .execute(&req.plugin, req.args, evidence_scope)
+        .await
+    {
         Ok(data) => {
             let _ = state
                 .state_manager
