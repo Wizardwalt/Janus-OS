@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "Janus core runtime daemon: plugin execution, API server, state management"
 
+[lib]
+name = "janus_runtime"
+path = "src/lib.rs"
+
 [[bin]]
 name = "janus-runtime"
 path = "src/main.rs"

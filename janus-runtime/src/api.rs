@@ -18,13 +18,17 @@ use janus_core::{
     StateKey, UserRole,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::oneshot;
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    services::ServeDir,
+    trace::TraceLayer,
+};
 use tracing::info;
 
 #[derive(Clone)]
 pub struct ApiState {
-    config: Config,
     state_manager: Arc<StateManager>,
     executor: Arc<PluginExecutor>,
     hardware: Arc<HardwareManager>,
@@ -57,6 +61,8 @@ struct UserResponse {
     organization_id: String,
     email: String,
     role: String,
+    active: bool,
+    created_at: String,
 }
 
 #[derive(Deserialize)]
@@ -183,12 +189,18 @@ impl ApiServer {
         }
     }
 
-    pub async fn start(self) -> Result<()> {
+    /// Build the HTTP router.
+    ///
+    /// The protected API is mounted both at the root (desktop/server
+    /// deployments behind Caddy) and under `/api` (proxy and embedded
+    /// deployments). When `config.web_dir` contains the dashboard, the runtime
+    /// serves it from the same origin as the API so no cross-origin access is
+    /// required — this is what the Android kiosk app relies on.
+    fn build_router(&self) -> Result<Router> {
         let api_state = ApiState {
-            config: self.config.clone(),
-            state_manager: self.state_manager,
-            executor: self.executor,
-            hardware: self.hardware,
+            state_manager: Arc::clone(&self.state_manager),
+            executor: Arc::clone(&self.executor),
+            hardware: Arc::clone(&self.hardware),
         };
 
         let allowed_origins = self
@@ -203,7 +215,7 @@ impl ApiServer {
             ));
         }
 
-        let app = Router::new()
+        let api: Router = Router::new()
             .route("/health", get(health))
             .route("/hardware/status", get(hardware_status))
             .route("/auth/bootstrap", post(bootstrap))
@@ -236,20 +248,89 @@ impl ApiServer {
             .route("/plugins", get(list_plugins))
             .route("/state/:namespace/:key", get(get_state).post(set_state))
             .route("/audit/logs", get(get_audit_logs))
+            .with_state(api_state);
+
+        let mut app: Router = Router::new().nest("/api", api.clone()).merge(api);
+
+        if let Some(dir) = self.config.web_dir.as_ref() {
+            if dir.join("index.html").is_file() {
+                info!(dashboard = %dir.display(), "serving dashboard assets");
+                app = app.fallback_service(ServeDir::new(dir.clone()));
+            } else {
+                tracing::warn!(
+                    path = %dir.display(),
+                    "dashboard assets not found; running in API-only mode"
+                );
+            }
+        }
+
+        Ok(app
             .layer(
                 CorsLayer::new()
                     .allow_origin(AllowOrigin::list(allowed_origins))
                     .allow_methods([Method::GET, Method::POST])
-                    .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+                    .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                    .max_age(std::time::Duration::from_secs(600)),
             )
-            .with_state(api_state);
+            .layer(TraceLayer::new_for_http()))
+    }
 
+    /// Bind the listener, report the address that was actually bound (port `0`
+    /// selects an ephemeral port), then serve until `shutdown` resolves.
+    pub async fn serve_until<F>(
+        self,
+        ready: Option<oneshot::Sender<SocketAddr>>,
+        shutdown: F,
+    ) -> Result<()>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let app = self.build_router()?;
         let bind_addr = format!("{}:{}", self.config.web_bind, self.config.web_port);
         let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-        info!("API server listening on {}", bind_addr);
+        let local_addr = listener.local_addr()?;
+        if let Some(ready) = ready {
+            let _ = ready.send(local_addr);
+        }
+        info!(%local_addr, "API server listening");
 
-        axum::serve(listener, app).await?;
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown)
+            .await?;
+        info!("API server stopped");
         Ok(())
+    }
+
+    /// Serve until the process receives SIGINT/SIGTERM.
+    pub async fn start(self) -> Result<()> {
+        self.serve_until(None, shutdown_signal()).await
+    }
+}
+
+/// Resolve SIGINT/SIGTERM so the runtime drains in-flight requests on stop.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::error!(%error, "failed to install Ctrl+C handler");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => tracing::error!(%error, "failed to install SIGTERM handler"),
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
     }
 }
 
@@ -529,6 +610,8 @@ async fn list_users(
                             organization_id: user.organization_id,
                             email: user.email,
                             role: user.role.as_str().into(),
+                            active: user.active,
+                            created_at: user.created_at.to_rfc3339(),
                         })
                         .collect(),
                 ),
@@ -657,6 +740,8 @@ async fn create_user(
                     organization_id: created.organization_id,
                     email: created.email,
                     role: created.role.as_str().into(),
+                    active: created.active,
+                    created_at: created.created_at.to_rfc3339(),
                 }),
                 error: None,
             }),

@@ -12,13 +12,43 @@ let ws = null;
 let wsReady  = false;
 let currentCategory = null;
 let opsCount = 0;
+let wsRetryDelay = 1000;
+
+function wsUrl() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${location.host}/ws`;
+}
 
 function connectWS() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen    = () => { wsReady = true; };
-  ws.onmessage = (e) => { try { handleWsMessage(JSON.parse(e.data)); } catch(ex) {} };
-  ws.onclose   = () => { wsReady = false; setTimeout(connectWS, 2000); };
-  ws.onerror   = () => ws.close();
+  try {
+    ws = new WebSocket(wsUrl());
+  } catch (ex) {
+    scheduleReconnect();
+    return;
+  }
+  ws.onopen = () => {
+    wsReady = true;
+    wsRetryDelay = 1000;
+    setTerminalStatus(false);
+  };
+  ws.onmessage = (e) => { try { handleWsMessage(JSON.parse(e.data)); } catch (ex) {} };
+  ws.onclose = () => { wsReady = false; setTerminalStatus(true); scheduleReconnect(); };
+  ws.onerror = () => { try { ws.close(); } catch (ex) {} };
+}
+
+function scheduleReconnect() {
+  // Exponential backoff capped at 15s so a stopped backend does not spin.
+  const delay = wsRetryDelay;
+  wsRetryDelay = Math.min(wsRetryDelay * 2, 15000);
+  setTimeout(connectWS, delay);
+}
+
+function setTerminalStatus(offline) {
+  const status = document.getElementById('app-status');
+  if (status && offline && status.textContent === 'READY') {
+    status.textContent = 'OFFLINE';
+    status.className = 'app-status-badge error';
+  }
 }
 
 function wsSend(obj) {
@@ -49,6 +79,12 @@ function handleWsMessage(msg) {
       break;
     case 'module_error':
       finishModule(true, msg.text);
+      break;
+    case 'status':
+      if (msg.status && typeof msg.status.ops_count === 'number') {
+        opsCount = msg.status.ops_count;
+        updateOpsCount();
+      }
       break;
   }
 }
@@ -302,6 +338,9 @@ function renderModuleList(modules, category) {
     return;
   }
   container.innerHTML = '';
+  if (!modules.length && category) {
+    appendTerminalLine(`[REGISTRY] No modules are installed for the '${category}' category.`);
+  }
   modules.forEach(mod => {
     const item = document.createElement('div');
     item.className = 'module-item';

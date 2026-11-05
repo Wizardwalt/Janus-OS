@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Runtime permissions pre-granted to JanusCore on the appliance image.
+
+  A kiosk has nobody to answer a permission dialog at boot, so the ones the
+  hardware bridges need are granted at install time. `fixed="false"` keeps them
+  revocable from Settings, which matters for the camera and microphone: an
+  operator who wants them off is not fighting the image.
+-->
+<exceptions>
+    <exception package="com.janus.omega">
+        <permission name="android.permission.CAMERA" fixed="false" />
+        <permission name="android.permission.RECORD_AUDIO" fixed="false" />
+        <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false" />
+        <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false" />
+        <permission name="android.permission.READ_PHONE_STATE" fixed="false" />
+        <permission name="android.permission.READ_PHONE_NUMBERS" fixed="false" />
+        <permission name="android.permission.BLUETOOTH_CONNECT" fixed="false" />
+        <permission name="android.permission.BLUETOOTH_SCAN" fixed="false" />
+        <permission name="android.permission.POST_NOTIFICATIONS" fixed="false" />
+        <permission name="android.permission.READ_EXTERNAL_STORAGE" fixed="false" />
+    </exception>
+</exceptions>

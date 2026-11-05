@@ -34,6 +34,11 @@ pub struct Config {
     /// Browser origins allowed to call the protected runtime API.
     #[serde(default = "default_allowed_origins")]
     pub allowed_origins: Vec<String>,
+    /// Optional directory containing the dashboard assets. When set, the
+    /// runtime serves the dashboard on the same origin as the API, which is how
+    /// the Android application and single-service deployments run.
+    #[serde(default)]
+    pub web_dir: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -51,6 +56,7 @@ impl Default for Config {
             serial_port: None,
             license_public_key: std::env::var("JANUS_LICENSE_PUBLIC_KEY").ok(),
             allowed_origins: default_allowed_origins(),
+            web_dir: None,
         }
     }
 }

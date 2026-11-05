@@ -58,8 +58,12 @@ Janus-Omega-OS/
 ├── apocalypse_engineering/  # Advanced engineering module suite
 ├── core/                    # Core Lua infrastructure
 ├── janus-core/              # Shared Rust types
-├── janus-runtime/           # Runtime crate
-└── janus-tui/               # Terminal UI crate
+├── janus-runtime/           # Runtime crate (binary + library)
+├── janus-tui/               # Terminal UI crate
+├── janus-android/           # JNI bridge: libjanus_android.so
+├── app/                     # Android application (kiosk shell, service, bridges)
+├── android/device/janus/    # AOSP device overlay for the Radxa CM5 image
+└── iso/, deploy/            # Arch live ISO and systemd/Caddy deployment
 ```
 
 ---
@@ -124,6 +128,33 @@ cargo build --release --bin janus-web
 ```
 
 The server binds `0.0.0.0:5000`, serves static files from `web/`, and opens a WebSocket at `/ws`. No external services required — SQLite is bundled.
+
+---
+
+## Android / Pip-Boy image
+
+JanusOS is also an Android build: JanusCore is a privileged, platform-signed app
+that owns the screen and hosts the Rust engine in-process through JNI. The
+dashboard is the same `web/` UI, loaded from the engine's loopback port.
+
+Two artifacts come from one code base:
+
+| Target | How | What it can do |
+| --- | --- | --- |
+| **JanusOS CM5 image** | AOSP 13 image with the overlay in `android/device/janus/titan`; app in `/system/priv-app`, signed with the platform key, Device Owner | boots straight into the dashboard, phone/radio, sensors, camera, USB, package management, secure settings |
+| **Generic APK** | `scripts/build-android.sh` → `adb install` on any Android 12+ device | full engine + dashboard, device inventory, battery/network; privileged and telephony surfaces degrade gracefully |
+
+```bash
+# Rust targets + NDK, then:
+scripts/build-android.sh                       # arm64 debug APK
+scripts/build-android.sh --release --full --stage   # release APK, staged for the image
+
+# On the image, once:
+adb shell dpm set-device-owner com.janus.omega/.device.JanusDeviceAdminReceiver
+```
+
+Build and provisioning details, the permission model, the JNI contract and a
+troubleshooting table: **[docs/ANDROID.md](docs/ANDROID.md)**.
 
 ---
 

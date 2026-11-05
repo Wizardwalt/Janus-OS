@@ -1,8 +1,0 @@
-<resources>
-    <string name="app_name">Janus Omega</string>
-    <string name="default_server_url">http://10.0.2.2:5000</string>
-    <string name="server_url_label">JanusOS Server URL</string>
-    <string name="server_url_hint">http://192.168.x.x:5000</string>
-    <string name="save">Save</string>
-    <string name="full_interface">Full Interface</string>
-</resources>

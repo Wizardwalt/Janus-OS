@@ -1,0 +1,45 @@
+// JanusCore: the JanusOS engine plus kiosk shell, installed as a privileged
+// platform application on the Radxa CM5 image.
+//
+// The APK itself is produced by Gradle (`app/`), because the engine ships a Rust
+// shared object staged through cargo-ndk — something soong does not build. The
+// import below is the hand-off point: scripts/build-android.sh copies the
+// assembled APK to janus_core/JanusCore.apk before the AOSP build runs.
+//
+// Re-signing: no `presigned: true`, so the build signs the APK with the platform
+// key (`certificate: "platform"`). That signature is what makes the privileges in
+// privapp-permissions-com.janus.omega.xml grantable, and it must match the
+// device's platform key or the app will not install into priv-app.
+
+android_app_import {
+    name: "JanusCore",
+    apk: "JanusCore.apk",
+    certificate: "platform",
+    privileged: true,
+    dex_preopt: {
+        enabled: false,
+    },
+    required: [
+        "privapp-permissions-com.janus.omega",
+        "default-permissions-com.janus.omega",
+    ],
+}
+
+// Privileged permissions are not granted just by declaring them: since Android 8
+// the platform only honors them for apps listed in
+// /system/etc/permissions/privapp-permissions-<package>.xml.
+prebuilt_etc {
+    name: "privapp-permissions-com.janus.omega",
+    src: "privapp-permissions-com.janus.omega.xml",
+    sub_dir: "permissions",
+    filename_from_src: true,
+}
+
+// Runtime permissions the kiosk cannot ask for at boot (there is nobody to answer
+// a dialog): CAMERA, RECORD_AUDIO, location, telephony, notifications.
+prebuilt_etc {
+    name: "default-permissions-com.janus.omega",
+    src: "default-permissions-com.janus.omega.xml",
+    sub_dir: "default-permissions",
+    filename_from_src: true,
+}

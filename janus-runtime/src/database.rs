@@ -28,6 +28,15 @@ impl Database {
     /// Open or create database
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // WAL keeps readers (audit views, health checks) from blocking the
+        // single writer, and the busy timeout prevents spurious "database is
+        // locked" errors during concurrent API requests.
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA foreign_keys = ON;
+             PRAGMA busy_timeout = 5000;",
+        )?;
         let db = Self {
             conn: Mutex::new(conn),
         };
@@ -823,7 +832,9 @@ impl AuditLog for Database {
         Ok(entries)
     }
 
-    fn cleanup(&self, days_old: u32) -> janus_core::Result<usize> {
+    /// Delete audit rows older than `days_old`. Called at startup by both the
+    /// server binary and the embedded (JNI) runtime.
+    pub fn cleanup(&self, days_old: u32) -> janus_core::Result<usize> {
         let cutoff = Utc::now() - chrono::Duration::days(days_old as i64);
         let rows = self
             .conn

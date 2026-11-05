@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Policies requested by the device administration component.
+
+  Deliberately minimal: the kiosk lockdown in DeviceOwnerManager uses lock task
+  and status-bar restrictions, not wipe or password enforcement, so the receiver
+  never gains the ability to destroy operator data.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>

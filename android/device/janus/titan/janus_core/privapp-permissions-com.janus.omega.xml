@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Privileged permissions granted to the JanusOS core application.
+
+  This file must stay in sync with the `tools:ignore="ProtectedPermissions"`
+  block in app/src/main/AndroidManifest.xml: a permission declared by the app but
+  missing here is silently denied, and a permission listed here but not declared
+  by the app is a build-time error (the platform complains about unknown
+  permissions for the package).
+
+  Only signature|privileged permissions belong in this list. Runtime permissions
+  (camera, microphone, location, notifications) are requested by the app and, on
+  the appliance image, pre-granted by the product's default-permissions config.
+-->
+<permissions>
+    <privapp-permissions package="com.janus.omega">
+        <!-- Package management: install/remove operator tooling from the dashboard. -->
+        <permission name="android.permission.INSTALL_PACKAGES" />
+        <permission name="android.permission.DELETE_PACKAGES" />
+        <permission name="android.permission.PACKAGE_USAGE_STATS" />
+
+        <!-- Device configuration and diagnostics. -->
+        <permission name="android.permission.WRITE_SECURE_SETTINGS" />
+        <permission name="android.permission.READ_LOGS" />
+        <permission name="android.permission.DUMP" />
+
+        <!-- Appliance lifecycle and hardware bridges. -->
+        <permission name="android.permission.REBOOT" />
+        <permission name="android.permission.MANAGE_USB" />
+    </privapp-permissions>
+</permissions>

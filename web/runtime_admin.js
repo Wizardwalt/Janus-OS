@@ -12,33 +12,81 @@ function createRuntimeAdminPanel() {
 async function refreshRuntimeAdminPanel() {
   const panel = document.getElementById('runtime-admin-panel');
   const content = panel?.querySelector('[data-content]');
-  if (!panel || !content) return;
+  if (!panel || !content || !window.janusRuntime.hasSession()) return;
   try {
     const user = await window.janusRuntime.me();
     if (user.role !== 'organization_admin') { panel.style.display = 'none'; return; }
     panel.style.display = 'block'; content.textContent = 'Loading organization administration data...';
-    const [users, engagements, license] = await Promise.all([window.janusRuntime.users(), window.janusRuntime.engagements(), window.janusRuntime.licenseStatus()]);
+
+    // A missing license must not hide users and engagements, so each request is
+    // resolved independently.
+    const [usersResult, engagementsResult, licenseResult] = await Promise.allSettled([
+      window.janusRuntime.users(),
+      window.janusRuntime.engagements(),
+      window.janusRuntime.licenseStatus(),
+    ]);
+
     content.replaceChildren();
-    addText(content, `LICENSE: ${license.plan} · ${license.enabled_features.join(', ')}`);
+
+    if (licenseResult.status === 'fulfilled') {
+      const license = licenseResult.value;
+      addText(content, `LICENSE: ${license.plan} · ${license.enabled_features.join(', ')} · expires ${new Date(license.expires_at).toLocaleDateString()}`);
+    } else {
+      addText(content, `LICENSE: not available (${licenseResult.reason?.message || 'no active license imported'})`);
+    }
+
     addText(content, 'USERS:', true);
-    users.forEach(user => {
-      const row = document.createElement('div'); row.style.margin = '4px 0';
-      row.textContent = `${user.email} · ${user.role} · ${user.active ? 'ACTIVE' : 'DISABLED'} `;
-      const toggle = document.createElement('button'); toggle.textContent = user.active ? 'DISABLE' : 'ENABLE';
-      toggle.addEventListener('click', async () => { try { await window.janusRuntime.setUserActive(user.user_id, !user.active); refreshRuntimeAdminPanel(); } catch (error) { alert(error.message); } });
-      row.appendChild(toggle); content.appendChild(row);
-    });
+    if (usersResult.status === 'fulfilled') {
+      usersResult.value.forEach(user => {
+        const row = document.createElement('div'); row.style.margin = '4px 0';
+        row.textContent = `${user.email} · ${user.role} · ${user.active ? 'ACTIVE' : 'DISABLED'} `;
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.textContent = user.active ? 'DISABLE' : 'ENABLE';
+        toggle.addEventListener('click', async () => {
+          toggle.disabled = true;
+          try { await window.janusRuntime.setUserActive(user.user_id, !user.active); refreshRuntimeAdminPanel(); }
+          catch (error) { alert(error.message); toggle.disabled = false; }
+        });
+        row.appendChild(toggle); content.appendChild(row);
+      });
+    } else {
+      addText(content, `unavailable: ${usersResult.reason?.message || 'request failed'}`);
+    }
+
     addText(content, 'ENGAGEMENTS:', true);
-    engagements.forEach(item => {
-      const row = document.createElement('div'); row.style.margin = '4px 0';
-      row.textContent = `${item.authorization_reference} · ${item.active ? 'ACTIVE' : 'DISABLED'} `;
-      const toggle = document.createElement('button'); toggle.textContent = item.active ? 'DISABLE' : 'ENABLE';
-      toggle.addEventListener('click', async () => { try { await window.janusRuntime.setEngagementActive(item.id, !item.active); refreshRuntimeAdminPanel(); } catch (error) { alert(error.message); } });
-      row.appendChild(toggle); content.appendChild(row);
-    });
-  } catch (error) { content.textContent = `Administration unavailable: ${error.message}`; panel.style.display = 'block'; }
+    if (engagementsResult.status === 'fulfilled') {
+      const engagements = engagementsResult.value;
+      if (!engagements.length) addText(content, 'none recorded');
+      engagements.forEach(item => {
+        const row = document.createElement('div'); row.style.margin = '4px 0';
+        row.textContent = `${item.authorization_reference} · ${item.active ? 'ACTIVE' : 'DISABLED'} · until ${new Date(item.ends_at).toLocaleDateString()} `;
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.textContent = item.active ? 'DISABLE' : 'ENABLE';
+        toggle.addEventListener('click', async () => {
+          toggle.disabled = true;
+          try { await window.janusRuntime.setEngagementActive(item.id, !item.active); refreshRuntimeAdminPanel(); }
+          catch (error) { alert(error.message); toggle.disabled = false; }
+        });
+        row.appendChild(toggle); content.appendChild(row);
+      });
+    } else {
+      addText(content, `unavailable: ${engagementsResult.reason?.message || 'request failed'}`);
+    }
+  } catch (error) {
+    content.textContent = `Administration unavailable: ${error.message}`;
+    panel.style.display = 'block';
+  }
 }
-function addText(parent, text, title = false) { const div = document.createElement('div'); div.textContent = text; div.style.cssText = title ? 'margin-top:9px;color:#ffc7ff' : 'margin:3px 0'; parent.appendChild(div); }
+
+function addText(parent, text, title = false) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  div.style.cssText = title ? 'margin-top:9px;color:#ffc7ff' : 'margin:3px 0';
+  parent.appendChild(div);
+}
+
 document.addEventListener('DOMContentLoaded', createRuntimeAdminPanel);
 window.addEventListener('janus:session', refreshRuntimeAdminPanel);
 window.addEventListener('janus:logout', () => { const panel = document.getElementById('runtime-admin-panel'); if (panel) panel.style.display = 'none'; });

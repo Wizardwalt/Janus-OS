@@ -1,11 +1,13 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Request, State,
     },
-    response::IntoResponse,
+    http::{header::HeaderName, HeaderValue},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::get,
-    Router,
+    Json, Router,
 };
 use mlua::prelude::*;
 use rand::Rng;
@@ -13,10 +15,15 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     net::SocketAddr,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 use tokio::sync::broadcast;
 use tower_http::services::ServeDir;
+
+/// Default bind address. Override with `JANUS_WEB_ADDR` (for example
+/// `127.0.0.1:5000` when a reverse proxy terminates TLS in front of the GUI).
+const DEFAULT_BIND_ADDR: &str = "0.0.0.0:5000";
 
 // ─── Lua Sandbox Prelude ───────────────────────────────────────────────────────
 // Loaded before every module. Sets up __index auto-stub on _G so ANY undefined
@@ -43,6 +50,23 @@ struct GuiState {
     aria_status: Arc<Mutex<AriaStatus>>,
     module_registry: Arc<HashMap<String, Vec<ModuleInfo>>>,
     /// The legacy Lua runner is available only when demo mode is explicitly enabled.
+    demo_mode: bool,
+    /// Base URL the browser should use for the protected runtime API.
+    runtime_url: String,
+}
+
+#[derive(Serialize)]
+struct RuntimeConfig {
+    runtime_url: String,
+    demo_mode: bool,
+}
+
+#[derive(Serialize)]
+struct HealthStatus {
+    status: &'static str,
+    version: &'static str,
+    modules: usize,
+    categories: usize,
     demo_mode: bool,
 }
 
@@ -121,6 +145,7 @@ fn build_module_registry() -> HashMap<String, Vec<ModuleInfo>> {
         ("titan_exclusive", "plugins/titan_exclusive"),
         ("advanced_mobile", "plugins/advanced_mobile"),
         ("expansion", "plugins/expansion"),
+        ("mobile_expansion", "plugins/mobile_expansion"),
         ("offensive", "plugins/offensive"),
         ("tactical", "plugins/tactical"),
         // modules/
@@ -160,7 +185,9 @@ fn build_module_registry() -> HashMap<String, Vec<ModuleInfo>> {
                 })
                 .collect();
             files.sort_by_key(|e| e.file_name());
-            for entry in files.iter().take(200) {
+            // Every discoverable module is listed: the dashboard shows the real
+            // inventory of the deployment instead of a truncated sample.
+            for entry in files.iter() {
                 let fname = entry.file_name();
                 let name = fname.to_string_lossy();
                 let base = name.trim_end_matches(".lua").to_string();
@@ -227,10 +254,9 @@ fn read_module_desc(path: &std::path::Path) -> String {
                 } else {
                     text
                 };
-                return desc
-                    .trim_end_matches(|c: char| c == '|' || c == '═')
-                    .trim()
-                    .to_string();
+                let cleaned = desc.trim_end_matches(|c: char| c == '|' || c == '═').trim();
+                // Descriptions are rendered in the launcher, so cap their length.
+                return cleaned.chars().take(160).collect();
             }
         }
     }
@@ -798,9 +824,12 @@ fn aria_respond(msg: &str) -> String {
     } else if t.len() < 5 {
         "I'm listening. You can say more.".into()
     } else {
+        // Slice on character boundaries: operators may type non-ASCII text and
+        // byte slicing here used to panic the WebSocket task.
+        let preview: String = msg.trim().chars().take(60).collect();
         format!(
             "Understood. Processing: \"{}\". Analysing context and preparing response.",
-            &msg[..msg.len().min(60)]
+            preview
         )
     }
 }
@@ -855,15 +884,21 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
                             match inc.msg_type.as_str() {
 
                                 "get_modules" => {
-                                    if let Some(mods) = state.module_registry.get(&inc.category) {
-                                        let out = serde_json::to_string(&WsOutgoing {
-                                            msg_type: "module_list".into(),
-                                            modules:  Some(mods.clone()),
-                                            category: Some(inc.category.clone()),
-                                            line: None, text: None, status: None,
-                                        }).unwrap();
-                                        let _ = socket.send(Message::Text(out)).await;
-                                    }
+                                    // Always answer, even for an unknown category, so the
+                                    // launcher never hangs on "Loading modules...".
+                                    let modules = state
+                                        .module_registry
+                                        .get(&inc.category)
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    let out = serde_json::to_string(&WsOutgoing {
+                                        msg_type: "module_list".into(),
+                                        modules: Some(modules),
+                                        category: Some(inc.category.clone()),
+                                        line: None, text: None, status: None,
+                                    })
+                                    .unwrap_or_else(|_| ws_msg("module_error", None, Some("Failed to encode module list.".into())));
+                                    let _ = socket.send(Message::Text(out)).await;
                                 }
 
                                 "run_module" => {
@@ -919,7 +954,32 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
                                         ))).await;
                                     }
 
-                                    if let Ok(mut s) = state.aria_status.lock() { s.ops_count += 1; }
+                                    // Broadcast the authoritative status so every open
+                                    // dashboard stays in sync with the server.
+                                    let snapshot = {
+                                        let mut guard = state
+                                            .aria_status
+                                            .lock()
+                                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                        if !had_error {
+                                            guard.ops_count = guard.ops_count.saturating_add(1);
+                                        }
+                                        guard.thought = format!("Last operation: {}", label);
+                                        guard.clone()
+                                    };
+                                    // The socket itself is subscribed to the broadcast
+                                    // channel, so a single publish reaches every client
+                                    // (including this one) exactly once.
+                                    if let Ok(out) = serde_json::to_string(&WsOutgoing {
+                                        msg_type: "status".into(),
+                                        line: None,
+                                        text: None,
+                                        modules: None,
+                                        status: Some(snapshot),
+                                        category: None,
+                                    }) {
+                                        let _ = state.tx.send(out);
+                                    }
                                 }
 
                                 "aria_chat" => {
@@ -953,6 +1013,110 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
     }
 }
 
+// ─── HTTP handlers ────────────────────────────────────────────────────────────
+
+async fn healthz(State(state): State<GuiState>) -> Json<HealthStatus> {
+    let modules: usize = state.module_registry.values().map(Vec::len).sum();
+    Json(HealthStatus {
+        status: "ok",
+        version: env!("CARGO_PKG_VERSION"),
+        modules,
+        categories: state.module_registry.len(),
+        demo_mode: state.demo_mode,
+    })
+}
+
+/// Expose the configured runtime API base URL so a deployment can point the
+/// dashboard at the protected runtime without rebuilding the frontend.
+async fn runtime_config(State(state): State<GuiState>) -> Json<RuntimeConfig> {
+    Json(RuntimeConfig {
+        runtime_url: state.runtime_url.clone(),
+        demo_mode: state.demo_mode,
+    })
+}
+
+/// Add conservative browser hardening headers to every response.
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("SAMEORIGIN"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
+}
+
+/// Resolve SIGINT/SIGTERM so systemd stops the process cleanly.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            eprintln!("[GUI] failed to install Ctrl+C handler: {}", error);
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => eprintln!("[GUI] failed to install SIGTERM handler: {}", error),
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+}
+
+/// Locate the dashboard assets. An explicit `JANUS_WEB_DIR` wins; otherwise the
+/// current directory and the executable's directory are tried so the binary
+/// works both from the repository and from an installed layout.
+fn resolve_web_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("JANUS_WEB_DIR") {
+        return PathBuf::from(dir);
+    }
+
+    let candidates = [
+        PathBuf::from("web"),
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|parent| parent.join("web")))
+            .unwrap_or_default(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent()?.parent()?.parent().map(|root| root.join("web")))
+            .unwrap_or_default(),
+    ];
+
+    for candidate in candidates {
+        if candidate.join("index.html").is_file() {
+            return candidate;
+        }
+    }
+
+    PathBuf::from("web")
+}
+
+fn runtime_url() -> String {
+    std::env::var("JANUS_RUNTIME_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "/api".to_string())
+}
+
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -971,6 +1135,14 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("JANUS_DEMO_MODE").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE")
     );
+    let web_dir = resolve_web_dir();
+    if !web_dir.join("index.html").is_file() {
+        anyhow::bail!(
+            "dashboard assets not found in {} (set JANUS_WEB_DIR to the directory containing index.html)",
+            web_dir.display()
+        );
+    }
+
     println!(
         "[GUI] Module registry: {} modules across {} categories",
         total,
@@ -984,22 +1156,35 @@ async fn main() -> anyhow::Result<()> {
             "DISABLED"
         }
     );
+    println!("[GUI] Serving dashboard assets from {}", web_dir.display());
 
+    let runtime_url = runtime_url();
     let state = GuiState {
         tx,
         aria_status,
         module_registry,
         demo_mode,
+        runtime_url,
     };
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
-        .fallback_service(ServeDir::new("web"))
-        .with_state(state);
+        .route("/healthz", get(healthz))
+        .route("/runtime-config.json", get(runtime_config))
+        .fallback_service(ServeDir::new(web_dir))
+        .with_state(state)
+        .layer(middleware::from_fn(security_headers));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 5000));
-    println!("[GUI] JanusOS GUI server → http://0.0.0.0:5000");
+    let bind = std::env::var("JANUS_WEB_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
+    let addr: SocketAddr = bind
+        .parse()
+        .map_err(|error| anyhow::anyhow!("invalid JANUS_WEB_ADDR '{}': {}", bind, error))?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    println!("[GUI] JanusOS GUI server → http://{}", addr);
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    println!("[GUI] JanusOS GUI server stopped");
     Ok(())
 }

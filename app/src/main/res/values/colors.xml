@@ -2,7 +2,10 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <!-- Pip-Boy palette: phosphor green on near-black, with the violet accent
+         the dashboard already uses for secondary actions. -->
     <color name="janus_green">#00FF41</color>
     <color name="janus_purple">#9D00FF</color>
     <color name="janus_bg">#0A0A0A</color>
+    <color name="janus_dim">#8C9B8C</color>
 </resources>

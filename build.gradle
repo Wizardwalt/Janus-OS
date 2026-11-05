@@ -1,4 +1,4 @@
-// Root build.gradle for Janus Omega Android project
+// Root build script for the JanusOS Android application.
 buildscript {
     repositories {
         google()
@@ -6,10 +6,12 @@ buildscript {
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.2.2'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22"
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
     }
 }
 
-task clean(type: Delete) {
-    delete rootProject.buildDir
+// `gradle :app:clean` removes the packaged JanusOS assets and native libraries
+// that are staged into app/build by the asset/native sync tasks.
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
 }

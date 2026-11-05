@@ -1,37 +1,153 @@
+// JanusOS Android application.
+//
+// The Janus engine (Rust) is linked into the app as `libjanus_android.so`. Two
+// packaging modes are supported:
+//
+//   * system image  — installed to /system/priv-app by the AOSP product overlay
+//                     in android/device/janus/titan, signed with the platform key.
+//   * sideloaded    — a normal APK for any Android 12+ phone, optionally promoted
+//                     to Device Owner with `adb shell dpm set-device-owner`.
+//
+// The dashboard, Lua plugin catalogue and core modules are packaged as assets and
+// extracted into the app sandbox on first launch, because the engine needs real
+// file system paths.
+
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
+
+def janusRoot = rootProject.projectDir
+def fullCatalogue = (findProperty('janusFullCatalogue') ?: 'false').toString().toBoolean()
+def rustAbi = (findProperty('janusRustAbi') ?: 'arm64-v8a').toString()
+def rustTarget = [
+        'arm64-v8a'  : 'aarch64-linux-android',
+        'x86_64'     : 'x86_64-linux-android',
+        'armeabi-v7a': 'armv7-linux-androideabi',
+][rustAbi]
+
+def janusAssetsDir = layout.buildDirectory.dir('janusAssets')
+def janusJniRoot = layout.buildDirectory.dir('janusJniLibs')
+
+// Stage the runtime payload: dashboard, plugin catalogue and core modules.
+tasks.register('syncJanusAssets', Sync) {
+    into janusAssetsDir
+    from(new File(janusRoot, 'web')) { into 'web' }
+    from(new File(janusRoot, 'plugins')) { into 'plugins' }
+    from(new File(janusRoot, 'core')) { into 'core' }
+    if (fullCatalogue) {
+        // `-PjanusFullCatalogue=true` adds the 34 MB extended module catalogue.
+        from(new File(janusRoot, 'modules')) { into 'modules' }
+        from(new File(janusRoot, 'apocalypse_engineering')) { into 'apocalypse_engineering' }
+    }
+}
+
+// Stage the JNI library built by `cargo ndk -t <abi> build --release -p janus-android`.
+tasks.register('syncJanusNativeLib', Copy) {
+    def library = new File(janusRoot, "target/${rustTarget}/release/libjanus_android.so")
+    onlyIf { library.isFile() }
+    from library
+    into janusJniRoot.map { it.dir(rustAbi) }
+    doFirst {
+        if (!library.isFile()) {
+            logger.warn("JanusOS: ${library} is missing. Build it with:\n" +
+                    "  cargo ndk -t ${rustAbi} build --release -p janus-android")
+        }
+    }
+}
 
 android {
     namespace 'com.janus.omega'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.janus.omega"
+        applicationId 'com.janus.omega'
         minSdk 24
         targetSdk 34
-        versionCode 2
-        versionName "2.0"
+        versionCode 3
+        versionName '3.0.0'
+        buildConfigField 'boolean', 'FULL_CATALOGUE', "${fullCatalogue}"
+        // Ed25519 public key used to verify imported licences. Empty means the
+        // engine rejects every licence import, which is the correct default for
+        // a developer build.
+        def licenseKey = (findProperty('janusLicensePublicKey') ?: '').toString()
+        buildConfigField 'String', 'JANUS_LICENSE_PUBLIC_KEY', '"' + licenseKey + '"'
+        ndk {
+            abiFilters rustAbi
+        }
+    }
+
+    signingConfigs {
+        // The system image build re-signs with the platform key, so the default
+        // build only needs a local keystore. Supply one through the environment
+        // for customer-signed generic APKs.
+        releaseKey {
+            if (System.getenv('JANUS_KEYSTORE') != null) {
+                storeFile file(System.getenv('JANUS_KEYSTORE'))
+                storePassword System.getenv('JANUS_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('JANUS_KEY_ALIAS') ?: 'janus'
+                keyPassword System.getenv('JANUS_KEY_PASSWORD') ?: System.getenv('JANUS_KEYSTORE_PASSWORD')
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+            debuggable true
+        }
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Fall back to the debug key so `assembleRelease` always yields an
+            // installable APK when no customer keystore is configured.
+            signingConfig System.getenv('JANUS_KEYSTORE') != null
+                    ? signingConfigs.releaseKey
+                    : signingConfigs.debug
         }
     }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
     kotlinOptions {
         jvmTarget = '17'
     }
+
+    sourceSets {
+        main {
+            assets.srcDir janusAssetsDir
+            jniLibs.srcDir janusJniRoot
+        }
+    }
+
+    packagingOptions {
+        // The engine reads Lua sources from the extracted asset tree, not from
+        // compressed APK entries.
+        jniLibs { useLegacyPackaging false }
+    }
+
+    lint {
+        // The privileged permissions below are declared here and granted by the
+        // system image's privapp allowlist (android/device/janus/titan).
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+// Make the staging tasks run before the APK is assembled.
+tasks.matching { it.name in ['mergeDebugAssets', 'mergeReleaseAssets'] }.configureEach {
+    dependsOn 'syncJanusAssets'
+}
+tasks.matching { it.name.startsWith('merge') && it.name.endsWith('JniLibFolders') }.configureEach {
+    dependsOn 'syncJanusNativeLib'
 }
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.9.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    implementation 'androidx.viewpager2:viewpager2:1.0.0'
-    implementation 'androidx.fragment:fragment-ktx:1.6.2'
+    implementation 'androidx.webkit:webkit:1.10.0'
 }

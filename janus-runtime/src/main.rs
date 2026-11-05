@@ -9,18 +9,14 @@
 
 use anyhow::Result;
 use clap::Parser;
-use janus_core::Config;
+use janus_core::{AuditLog, Config};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
-mod api;
-mod database;
-mod executor;
-mod hardware;
-mod lua;
-mod plugin;
-mod state;
+// The engine lives in the `janus_runtime` library so the same code can be
+// embedded in the Android application through JNI.
+use janus_runtime::{api, database, executor, hardware, lua, plugin, state};
 
 /// Janus Runtime CLI arguments
 #[derive(Parser, Debug)]
@@ -89,11 +85,26 @@ async fn main() -> Result<()> {
     info!("Configuration loaded: {:?}", config);
 
     // Open database
-    let db = database::Database::open(&config.db_path)?;
+    if let Some(parent) = config.db_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let db = Arc::new(database::Database::open(&config.db_path)?);
     info!("Database opened: {}", config.db_path.display());
 
+    // Apply the configured audit retention policy at startup so long-lived
+    // deployments cannot grow the audit table without bound.
+    if config.audit_enabled {
+        match db.cleanup(config.audit_retention_days) {
+            Ok(0) => info!("Audit retention: no expired entries"),
+            Ok(removed) => info!(removed, "Audit retention cleanup complete"),
+            Err(error) => tracing::warn!(%error, "Audit retention cleanup failed"),
+        }
+    }
+
     // Initialize state manager
-    let state_mgr = state::StateManager::new(&config, Arc::new(db)).await?;
+    let state_mgr = state::StateManager::new(&config, Arc::clone(&db)).await?;
     info!("State manager initialized");
 
     // Load plugins

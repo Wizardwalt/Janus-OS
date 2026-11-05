@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The engine is a loopback HTTP server; everything else must be TLS.
+
+  Cleartext is permitted only for 127.0.0.1/localhost so the WebView can load the
+  dashboard the Rust runtime serves. Any future cloud sync goes through HTTPS
+  with the system trust store.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

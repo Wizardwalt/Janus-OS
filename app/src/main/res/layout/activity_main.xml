@@ -1,68 +1,79 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<!--
+  Kiosk shell layout.
+
+  A full-bleed WebView hosts the dashboard served by the Rust engine. The
+  overlay above it covers the states where there is nothing to show yet
+  (engine starting) or the engine died, and is the only native UI in the app.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#0A0A0A">
+    android:background="@color/janus_bg"
+    android:keepScreenOn="true">
+
+    <WebView
+        android:id="@+id/kiosk_web_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/janus_bg"
+        android:importantForAutofill="no" />
 
     <LinearLayout
+        android:id="@+id/overlay"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="8dp"
-        android:background="#0A0A0A">
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="JANUS OMEGA"
-            android:textColor="#00FF41"
-            android:textSize="20sp"
-            android:textStyle="bold"
-            android:fontFamily="monospace" />
+        android:layout_height="match_parent"
+        android:background="@color/janus_bg"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingStart="48dp"
+        android:paddingEnd="48dp"
+        android:visibility="visible">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="● ONLINE"
-            android:textColor="#00FF41"
-            android:textSize="12sp"
             android:fontFamily="monospace"
-            android:gravity="center_vertical"
-            android:layout_gravity="center_vertical" />
+            android:letterSpacing="0.12"
+            android:text="@string/vault_label"
+            android:textColor="@color/janus_purple"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/overlay_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:fontFamily="monospace"
+            android:text="@string/engine_starting_title"
+            android:textColor="@color/janus_green"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/overlay_message"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:lineSpacingExtra="4dp"
+            android:text="@string/engine_starting_message"
+            android:textColor="@color/janus_dim"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/overlay_retry"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:backgroundTint="@color/janus_purple"
+            android:fontFamily="monospace"
+            android:minWidth="180dp"
+            android:text="@string/engine_retry"
+            android:textColor="@color/black"
+            android:textStyle="bold"
+            android:visibility="gone" />
     </LinearLayout>
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#00FF41" />
-
-    <com.google.android.material.tabs.TabLayout
-        android:id="@+id/tab_layout"
-        android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:background="#0A0A0A"
-        app:tabTextColor="#444444"
-        app:tabSelectedTextColor="#9D00FF"
-        app:tabIndicatorColor="#9D00FF"
-        app:tabIndicatorHeight="2dp"
-        app:tabRippleColor="#00000000"
-        app:tabTextAppearance="@style/TabText" />
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1A1A1A" />
-
-    <androidx.viewpager2.widget.ViewPager2
-        android:id="@+id/view_pager"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1" />
-
-</LinearLayout>
+</FrameLayout>

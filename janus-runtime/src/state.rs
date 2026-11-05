@@ -532,3 +532,132 @@ impl StateManager {
         Ok(removed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temporary_database() -> (Config, PathBuf) {
+        let mut path = std::env::temp_dir();
+        path.push(format!("janus-state-test-{}.db", uuid::Uuid::new_v4()));
+        let mut config = Config::default();
+        config.db_path = path.clone();
+        (config, path)
+    }
+
+    fn remove_database(path: &PathBuf) {
+        let _ = std::fs::remove_file(path);
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{}", path.display(), suffix));
+        }
+    }
+
+    #[tokio::test]
+    async fn bootstrap_login_and_session_lifecycle_are_enforced() {
+        let (config, path) = temporary_database();
+        let db = Arc::new(Database::open(&path).expect("open database"));
+        let manager = StateManager::new(&config, db)
+            .await
+            .expect("state manager");
+
+        let (organization, admin) = manager
+            .bootstrap_first_admin(
+                "Acme Forensics".into(),
+                "  Admin@Example.com ".into(),
+                "correct-horse-battery".into(),
+            )
+            .await
+            .expect("bootstrap");
+        assert_eq!(admin.role, UserRole::OrganizationAdmin);
+        assert_eq!(admin.organization_id, organization.id);
+
+        // Setup may only happen once.
+        assert!(manager
+            .bootstrap_first_admin(
+                "Second Org".into(),
+                "second@example.com".into(),
+                "correct-horse-battery".into(),
+            )
+            .await
+            .is_err());
+
+        // A wrong password never yields a session.
+        assert!(manager
+            .login("admin@example.com".into(), "wrong-password".into())
+            .await
+            .is_err());
+
+        // Emails are normalised before lookup.
+        let session = manager
+            .login("ADMIN@example.com".into(), "correct-horse-battery".into())
+            .await
+            .expect("login");
+        let account = manager
+            .authenticate_session(&session.token)
+            .await
+            .expect("session is valid");
+        assert_eq!(account.id, admin.id);
+
+        // The raw bearer token is never stored in the database.
+        assert!(manager.authenticate_session("not-a-real-token").await.is_err());
+
+        // Logout revokes the token.
+        manager.logout(&account, &session.token).await.expect("logout");
+        assert!(manager.authenticate_session(&session.token).await.is_err());
+
+        remove_database(&path);
+    }
+
+    #[tokio::test]
+    async fn state_values_are_persisted_and_reloaded() {
+        let (config, path) = temporary_database();
+        let key = StateKey::new("runtime", "mode");
+
+        {
+            let db = Arc::new(Database::open(&path).expect("open database"));
+            let manager = StateManager::new(&config, db).await.expect("state manager");
+            manager
+                .update_state(&key, serde_json::json!({"mode": "production"}))
+                .await
+                .expect("write state");
+        }
+
+        let db = Arc::new(Database::open(&path).expect("reopen database"));
+        let manager = StateManager::new(&config, db).await.expect("state manager");
+        assert_eq!(
+            manager.get(&key).await.expect("read state"),
+            Some(serde_json::json!({"mode": "production"}))
+        );
+
+        remove_database(&path);
+    }
+
+    #[tokio::test]
+    async fn execution_without_a_license_is_denied() {
+        let (config, path) = temporary_database_with_license_key();
+        let db = Arc::new(Database::open(&path).expect("open database"));
+        let manager = StateManager::new(&config, db).await.expect("state manager");
+        let (_, admin) = manager
+            .bootstrap_first_admin(
+                "Acme Forensics".into(),
+                "owner@example.com".into(),
+                "correct-horse-battery".into(),
+            )
+            .await
+            .expect("bootstrap");
+
+        let denied = manager
+            .authorize_production_execution(&admin, "eng_missing", "evidence-1", "forensics.hash", "0f")
+            .await;
+        assert!(denied.is_err());
+
+        remove_database(&path);
+    }
+
+    fn temporary_database_with_license_key() -> (Config, PathBuf) {
+        let (mut config, path) = temporary_database();
+        config.license_public_key = Some("configured-test-key".to_string());
+        (config, path)
+    }
+}

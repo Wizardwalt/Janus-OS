@@ -105,10 +105,16 @@ impl PluginLoader {
         self.plugins.get(id)
     }
 
-    /// List all plugins sorted by priority
+    /// List all plugins sorted by priority, then by identifier so the order is
+    /// stable across runs (HashMap iteration order is not).
     pub fn list_sorted(&self) -> Vec<(&str, &PluginSource)> {
         let mut plugins: Vec<_> = self.plugins.iter().map(|(k, v)| (k.as_str(), v)).collect();
-        plugins.sort_by_key(|(_k, v)| v.manifest.priority);
+        plugins.sort_by(|(left_id, left), (right_id, right)| {
+            left.manifest
+                .priority
+                .cmp(&right.manifest.priority)
+                .then_with(|| left_id.cmp(right_id))
+        });
         plugins
     }
 

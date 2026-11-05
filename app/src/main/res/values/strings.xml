@@ -1,3 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Janus Omega</string>
+    <string name="app_name">JanusOS</string>
+    <string name="vault_label">JANUS // OMEGA</string>
+    <string name="engine_starting_title">INITIALISING</string>
+    <string name="engine_starting_message">Bringing the Janus engine online...</string>
+    <string name="engine_retry">RESTART ENGINE</string>
+    <string name="notification_channel_engine">Janus engine</string>
+    <string name="notification_channel_engine_description">Keeps the embedded Janus runtime available.</string>
 </resources>

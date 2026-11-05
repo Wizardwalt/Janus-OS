@@ -222,7 +222,11 @@ class AriaProfileManager {
   }
 
   exists() {
-    return !!localStorage.getItem(ARIA_PROFILE_KEY);
+    try {
+      return !!localStorage.getItem(ARIA_PROFILE_KEY);
+    } catch (e) {
+      return false;
+    }
   }
 
   load() {
@@ -310,7 +314,14 @@ class AriaProfileManager {
   }
 
   _save() {
-    localStorage.setItem(ARIA_PROFILE_KEY, JSON.stringify(this._profile));
+    try {
+      localStorage.setItem(ARIA_PROFILE_KEY, JSON.stringify(this._profile));
+      return true;
+    } catch (e) {
+      // Private browsing or a full quota must not break the launcher.
+      console.warn('ARIA profile could not be persisted:', e);
+      return false;
+    }
   }
 }
 

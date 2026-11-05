@@ -3,7 +3,8 @@ members = [
   "janus-core",
   "janus-runtime",
   "janus-tui",
-  "janus-web"
+  "janus-web",
+  "janus-android"
 ]
 resolver = "2"
 
@@ -23,6 +24,7 @@ axum = { version = "0.7", features = ["ws"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.27"
+jni = "0.21"
 machine-uid = "0.3"
 mlua = { version = "0.9", features = ["lua54", "vendored", "send"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
@@ -36,7 +38,7 @@ sha2 = "0.10"
 tokio = { version = "1.32", features = ["full"] }
 tokio-tungstenite = "0.21"
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "fs"] }
+tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tui-logger = "0.9"

@@ -54,9 +54,23 @@ function runtimeAuthPanel() {
     if (action === 'login') await signIn();
   });
 
-  if (window.janusRuntime.hasSession()) {
-    window.janusRuntime.me().then(user => setStatus(`Signed in as ${user.email} (${user.role}).`)).catch(() => setStatus('Stored session expired. Sign in again.', true));
-  }
+  // Load the deployment's configured runtime URL before restoring a session so
+  // the dashboard works behind a reverse proxy without editing files.
+  window.janusRuntime.loadServerConfig().then(() => {
+    const urlField = field('url');
+    if (urlField && document.activeElement !== urlField) urlField.value = window.janusRuntime.baseUrl;
+    if (!window.janusRuntime.hasSession()) return;
+    window.janusRuntime.me()
+      .then(user => {
+        panel.querySelector('[data-logout]').style.display = 'inline-block';
+        setStatus(`Signed in as ${user.email} (${user.role}).`);
+        window.dispatchEvent(new CustomEvent('janus:session', { detail: user }));
+      })
+      .catch(() => {
+        window.janusRuntime.clearSession();
+        setStatus('Stored session expired. Sign in again.', true);
+      });
+  });
 }
 
 function escapeHtml(value) {

@@ -1,19 +1,23 @@
-# ProGuard configuration
+# R8 keeps what JNI and the WebView reflectively reach into.
 
-# Keep class names
--keep public class * {
-    public protected *;
+# JNI: symbol names encode the fully-qualified class and method names, so the
+# class must not be renamed or its native methods stripped.
+-keep class com.janus.omega.core.NativeBridge { *; }
+-keepclasseswithmembernames,includedescriptorclasses class * {
+    native <methods>;
 }
 
-# Keep all annotations
--keepattributes *Annotation*
-
-# Keep all inner classes
--keep class *.* {
-    <init>(...);
+# WebView bridge: @JavascriptInterface methods are looked up by name from JS.
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
 }
+-keep class com.janus.omega.device.DeviceBridge { *; }
 
-# Don't obfuscate some library classes
--keep class com.yourlibrary.** { *; }
+# Android components referenced only from the manifest.
+-keep class com.janus.omega.MainActivity { *; }
+-keep class com.janus.omega.JanusRuntimeService { *; }
+-keep class com.janus.omega.device.JanusDeviceAdminReceiver { *; }
+-keep class com.janus.omega.device.BootReceiver { *; }
 
-# Other rules can be added as needed.
+# org.json is part of the platform; silence R8's optional lookups.
+-dontwarn org.json.**

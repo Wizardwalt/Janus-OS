@@ -1,3 +1,8 @@
+// JanusOS Android build entry point.
+//
+// This is the Gradle project for the Android application that hosts the Janus
+// engine. It is independent of the Rust workspace: `cargo ndk` produces
+// libjanus_android.so first and `app/build.gradle` copies it into jniLibs.
 pluginManagement {
     repositories {
         google()
@@ -5,12 +10,17 @@ pluginManagement {
         gradlePluginPortal()
     }
 }
+
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
         mavenCentral()
     }
 }
-rootProject.name = "JanusOmega"
+
+rootProject.name = 'JanusOS'
 include ':app'
+
+// The AOSP device overlay (android/device/janus/titan) is an Android.bp project
+// consumed by the Radxa CM5 tree, not a Gradle module, so it is not included here.
