@@ -473,6 +473,16 @@ impl StateManager {
             .db
             .find_engagement(engagement_id)?
             .ok_or_else(|| anyhow::anyhow!("engagement was not found"))?;
+        // Bind the engagement to the caller explicitly. `authorize_execution`
+        // also rejects a license/organization mismatch, but that check is
+        // indirect: it only holds while the license is always looked up by the
+        // caller's organization. Enforce tenant isolation here so a future
+        // change to license lookup cannot silently open a cross-tenant hole.
+        if engagement.organization_id != account.organization_id {
+            return Err(anyhow::anyhow!(
+                "engagement was not found in this organization"
+            ));
+        }
         let certification = self
             .db
             .find_module_certification(module_id)?

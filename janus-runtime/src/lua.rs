@@ -7,25 +7,60 @@
 use anyhow::Result;
 use mlua::prelude::*;
 use std::path::Path;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
+
+/// Outcome of attempting to load the `core/` Lua library at startup.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CoreLoadReport {
+    pub loaded: usize,
+    pub failed: usize,
+}
 
 /// Runtime used only while core modules are being loaded during startup.
+///
+/// The `core/` library is **uncertified demo content**. Loading it grants no
+/// production capability: the VM is sandboxed and no evidence scope is approved,
+/// so `janus.evidence.*` is unavailable here. Results are reported as counts so
+/// startup logs cannot imply that a capability was initialised when it was not.
 pub struct LuaEnv {
     lua: Lua,
 }
 
 impl LuaEnv {
     pub fn new() -> Result<Self> {
-        Ok(Self { lua: Lua::new() })
+        Ok(Self {
+            lua: new_sandbox_lua()?,
+        })
     }
 
-    /// Load Lua core files. One invalid file is reported but does not prevent
-    /// the daemon from starting.
-    pub async fn load_core_modules(&self, core_dir: &Path) -> Result<()> {
+    /// Load Lua core files, reporting how many actually loaded.
+    ///
+    /// One invalid file is reported but does not prevent the daemon from
+    /// starting. A file that fails is counted as failed, never as loaded.
+    pub async fn load_core_modules(&self, core_dir: &Path) -> Result<CoreLoadReport> {
+        let mut report = CoreLoadReport::default();
         if !core_dir.exists() {
             warn!("Core modules directory not found: {}", core_dir.display());
-            return Ok(());
+            return Ok(report);
         }
+
+        // Core scripts log through `janus.log`; give them a capture-only sink so
+        // a script that only defines functions can load. No host capability is
+        // exposed, and `janus.evidence` is deliberately absent.
+        let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let janus = self.lua.create_table()?;
+        {
+            let sink = sink.clone();
+            janus.set(
+                "log",
+                self.lua.create_function(move |_, _: LuaMultiValue| {
+                    // Startup core output is discarded; it is not evidence.
+                    let _ = sink.lock().map(|mut guard| guard.clear());
+                    Ok(())
+                })?,
+            )?;
+        }
+        self.lua.globals().set("janus", janus)?;
 
         for entry in std::fs::read_dir(core_dir)? {
             let path = entry?.path();
@@ -38,12 +73,25 @@ impl LuaEnv {
                 .and_then(|name| name.to_str())
                 .unwrap_or("core_module");
             if let Err(error) = self.lua.load(&source).set_name(name).exec() {
-                error!(module = name, %error, "Core Lua module failed to load");
+                report.failed += 1;
+                debug!(module = name, %error, "Core Lua module did not load (uncertified demo content)");
             } else {
-                debug!(module = name, "Loaded core Lua module");
+                report.loaded += 1;
+                debug!(module = name, "Loaded core Lua module (no production capability)");
             }
         }
-        Ok(())
+
+        if report.failed > 0 {
+            warn!(
+                loaded = report.loaded,
+                failed = report.failed,
+                "Core Lua library is uncertified demo content; {} of {} files did not load. \
+                 No production capability is provided by core/.",
+                report.failed,
+                report.loaded + report.failed
+            );
+        }
+        Ok(report)
     }
 }
 
@@ -602,6 +650,45 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.value["s"], "AB-3");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+
+    #[tokio::test]
+    async fn core_load_report_counts_failures_instead_of_claiming_success() {
+        let dir = temp_dir("core");
+        // One module that only defines a function, and one that raises.
+        std::fs::write(dir.join("good.lua"), "local x = 1\n").unwrap();
+        std::fs::write(dir.join("bad.lua"), "error('deliberate failure')\n").unwrap();
+        let env = LuaEnv::new().unwrap();
+        let report = env.load_core_modules(&dir).await.unwrap();
+        assert_eq!(report.loaded, 1, "the loadable module must be counted");
+        assert_eq!(report.failed, 1, "the failing module must be counted as failed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn core_env_is_sandboxed_and_grants_no_evidence_capability() {
+        let dir = temp_dir("core-sandbox");
+        std::fs::write(
+            dir.join("escape.lua"),
+            "local f = io.open('/etc/passwd', 'r')\n",
+        )
+        .unwrap();
+        let env = LuaEnv::new().unwrap();
+        let report = env.load_core_modules(&dir).await.unwrap();
+        assert_eq!(report.loaded, 0, "io must not be reachable from core modules");
+        assert_eq!(report.failed, 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_missing_core_directory_is_not_an_error() {
+        let env = LuaEnv::new().unwrap();
+        let report = env
+            .load_core_modules(Path::new("/nonexistent/janus/core/dir"))
+            .await
+            .unwrap();
+        assert_eq!(report, CoreLoadReport::default());
     }
 
     #[test]

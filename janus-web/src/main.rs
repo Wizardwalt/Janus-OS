@@ -457,6 +457,20 @@ fn read_module_desc(path: &std::path::Path) -> String {
 
 // ─── Lua Execution Engine ─────────────────────────────────────────────────────
 
+/// Single canonical marker for a failed legacy module run.
+///
+/// Producers and the WebSocket handler must both use this constant. They used
+/// to disagree (`[LUA ERROR]` vs `[ERROR]`), which made crashed modules report
+/// `module_complete` to the browser.
+const MODULE_ERROR_PREFIX: &str = "[ERROR]";
+
+/// True when any output line marks the run as failed.
+fn module_output_has_error(lines: &[String]) -> bool {
+    lines
+        .iter()
+        .any(|line| line.trim_start().starts_with(MODULE_ERROR_PREFIX))
+}
+
 fn run_lua_module_file(root: &std::path::Path, file_path: &str, category: &str) -> Vec<String> {
     let module_name = file_path
         .split('/')
@@ -471,19 +485,19 @@ fn run_lua_module_file(root: &std::path::Path, file_path: &str, category: &str) 
     let resolved = root.join(file_path);
     let canonical = match resolved.canonicalize() {
         Ok(path) => path,
-        Err(e) => return vec![format!("[ERROR] Cannot read module: {} — {}", file_path, e)],
+        Err(e) => return vec![format!("{MODULE_ERROR_PREFIX} Cannot read module: {} — {}", file_path, e)],
     };
     let canonical_root = match root.canonicalize() {
         Ok(path) => path,
-        Err(e) => return vec![format!("[ERROR] Cannot resolve project root: {}", e)],
+        Err(e) => return vec![format!("{MODULE_ERROR_PREFIX} Cannot resolve project root: {}", e)],
     };
     if !canonical.starts_with(&canonical_root) {
-        return vec![format!("[ERROR] Refusing module outside project root: {}", file_path)];
+        return vec![format!("{MODULE_ERROR_PREFIX} Refusing module outside project root: {}", file_path)];
     }
 
     let lua_src = match std::fs::read_to_string(&canonical) {
         Ok(s) => s,
-        Err(e) => return vec![format!("[ERROR] Cannot read module: {} — {}", file_path, e)],
+        Err(e) => return vec![format!("{MODULE_ERROR_PREFIX} Cannot read module: {} — {}", file_path, e)],
     };
 
     let output: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -800,8 +814,13 @@ fn run_lua_module_file(root: &std::path::Path, file_path: &str, category: &str) 
         // Plugins self-call execute() at end; modules define it but don't call it.
         if post_len == pre_len {
             if let Ok(func) = lua.globals().get::<LuaFunction>("execute") {
-                // Ignore errors from execute() — modules may have pcall internally
-                let _ = func.call::<LuaMultiValue>("primary_target");
+                // A module that raises must be reported as failed. Swallowing
+                // this error previously made crashed modules look successful.
+                if let Err(error) = func.call::<LuaMultiValue>("primary_target") {
+                    out.lock()
+                        .unwrap()
+                        .push(format!("{MODULE_ERROR_PREFIX} execute() failed: {error}"));
+                }
             }
         }
 
@@ -809,7 +828,10 @@ fn run_lua_module_file(root: &std::path::Path, file_path: &str, category: &str) 
     })();
 
     if let Err(e) = exec_result {
-        output.lock().unwrap().push(format!("[LUA ERROR] {}", e));
+        output
+            .lock()
+            .unwrap()
+            .push(format!("{MODULE_ERROR_PREFIX} {e}"));
     }
 
     // ── Build final output with header / footer ───────────────────────────────
@@ -1142,10 +1164,10 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
                                     let lines = tokio::task::spawn_blocking(move || {
                                         run_lua_module_file(&root, &file, &category)
                                     }).await.unwrap_or_else(|_| {
-                                        vec!["[ERROR] Module execution thread panicked.".into()]
+                                        vec![format!("{MODULE_ERROR_PREFIX} Module execution thread panicked.")]
                                     });
 
-                                    let had_error = lines.iter().any(|l| l.starts_with("[ERROR]"));
+                                    let had_error = module_output_has_error(&lines);
 
                                     for line in &lines {
                                         let _ = socket.send(Message::Text(
@@ -1279,4 +1301,54 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{module_output_has_error, MODULE_ERROR_PREFIX};
+
+    /// Regression: the Lua executor emitted `[LUA ERROR]` while the WebSocket
+    /// handler tested for `[ERROR]`, so a crashed module was reported to the
+    /// browser as `module_complete`. Both sides now share one constant.
+    #[test]
+    fn a_lua_failure_is_detected_as_an_error() {
+        let lines = vec![format!("{MODULE_ERROR_PREFIX} attempt to index a nil value")];
+        assert!(module_output_has_error(&lines));
+    }
+
+    #[test]
+    fn the_legacy_lua_error_prefix_is_no_longer_emitted() {
+        // If this ever appears again, the handler and producer have diverged.
+        assert_ne!(MODULE_ERROR_PREFIX, "[LUA ERROR]");
+        let lines = vec!["[LUA ERROR] something".to_string()];
+        assert!(
+            !module_output_has_error(&lines),
+            "only the canonical prefix is recognized; producers must use it"
+        );
+    }
+
+    #[test]
+    fn a_successful_run_is_not_an_error() {
+        let lines = vec![
+            "╔══════════════╗".to_string(),
+            "[SCAN] completed".to_string(),
+            "result: ok".to_string(),
+        ];
+        assert!(!module_output_has_error(&lines));
+    }
+
+    #[test]
+    fn an_error_anywhere_in_the_output_fails_the_run() {
+        let lines = vec![
+            "[SCAN] starting".to_string(),
+            format!("  {MODULE_ERROR_PREFIX} execute() failed: boom"),
+            "[SCAN] footer".to_string(),
+        ];
+        assert!(module_output_has_error(&lines));
+    }
+
+    #[test]
+    fn empty_output_is_not_an_error() {
+        assert!(!module_output_has_error(&[]));
+    }
 }

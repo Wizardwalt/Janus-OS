@@ -266,6 +266,8 @@ function execute() return 1 end
             ("evidence_hash.lua", "evidence.hash"),
             ("evidence_stat.lua", "evidence.stat"),
             ("evidence_list.lua", "evidence.list"),
+            ("evidence_read.lua", "evidence.read"),
+            ("evidence_manifest.lua", "evidence.manifest"),
         ] {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../plugins/evidence_readonly")

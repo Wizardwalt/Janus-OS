@@ -1,17 +1,36 @@
 //! Hardware abstraction layer for Titan device integration.
+//!
+//! **No production hardware driver is implemented yet.** Every operation that
+//! would touch a device returns an explicit error rather than a plausible-looking
+//! value. Returning `Ok(())` from a write that never happened, or `Ok((0.0, 0.0,
+//! 9.8))` from an accelerometer that was never read, would let a caller report
+//! unavailable hardware as working. Availability is reported from observable
+//! facts only.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{info, warn};
 
 /// Honest adapter status returned to authenticated clients.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct HardwareAdapterStatus {
     pub adapter: String,
     pub state: String,
     pub detail: String,
+}
+
+/// Consistent error for an adapter with no production driver.
+///
+/// The message names the adapter and operation so an audit trail records exactly
+/// what was refused, and never implies partial success.
+fn unavailable(adapter: &str, operation: &str) -> anyhow::Error {
+    anyhow!(
+        "hardware adapter '{}' is unsupported: no production driver is installed for '{}'",
+        adapter,
+        operation
+    )
 }
 
 /// Hardware interface trait
@@ -23,34 +42,41 @@ pub trait HardwareInterface: Send + Sync {
     fn available(&self) -> bool;
 }
 
-/// Serial port interface
+/// Serial port interface.
+///
+/// The device node may exist, but no driver is implemented, so `available()`
+/// reports only whether the configured path is present. It never implies that
+/// reads or writes will work.
 pub struct SerialInterface {
     port: String,
-    available: bool,
 }
 
 impl SerialInterface {
     pub fn new(port: impl Into<String>) -> Self {
-        Self {
-            port: port.into(),
-            available: true,
-        }
+        Self { port: port.into() }
+    }
+
+    /// The configured device path, for honest status reporting.
+    pub fn port(&self) -> &str {
+        &self.port
+    }
+
+    /// Whether the configured device node exists. This is a path check, not a
+    /// driver or readiness check.
+    pub fn device_node_exists(&self) -> bool {
+        std::path::Path::new(&self.port).exists()
     }
 
     pub async fn open(&mut self) -> Result<()> {
-        debug!("Opening serial port: {}", self.port);
-        // Placeholder: would use serialport crate
-        Ok(())
+        Err(unavailable("serial", "open"))
     }
 
-    pub async fn write(&self, data: &[u8]) -> Result<usize> {
-        debug!("Writing {} bytes to serial", data.len());
-        Ok(data.len())
+    pub async fn write(&self, _data: &[u8]) -> Result<usize> {
+        Err(unavailable("serial", "write"))
     }
 
-    pub async fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        debug!("Reading from serial");
-        Ok(0)
+    pub async fn read(&self, _buf: &mut [u8]) -> Result<usize> {
+        Err(unavailable("serial", "read"))
     }
 }
 
@@ -60,28 +86,30 @@ impl HardwareInterface for SerialInterface {
     }
 
     fn available(&self) -> bool {
-        self.available
+        self.device_node_exists()
     }
 }
 
 /// GPIO interface
-pub struct GpioInterface {
-    pins: Vec<u32>,
-}
+pub struct GpioInterface;
 
 impl GpioInterface {
     pub fn new() -> Self {
-        Self { pins: vec![] }
+        Self
     }
 
-    pub async fn set_pin(&mut self, pin: u32, level: bool) -> Result<()> {
-        debug!("GPIO pin {} -> {}", pin, level);
-        Ok(())
+    pub async fn set_pin(&mut self, _pin: u32, _level: bool) -> Result<()> {
+        Err(unavailable("gpio", "set_pin"))
     }
 
-    pub async fn read_pin(&self, pin: u32) -> Result<bool> {
-        debug!("Reading GPIO pin {}", pin);
-        Ok(false)
+    pub async fn read_pin(&self, _pin: u32) -> Result<bool> {
+        Err(unavailable("gpio", "read_pin"))
+    }
+}
+
+impl Default for GpioInterface {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -103,9 +131,16 @@ impl CellularInterface {
         Self
     }
 
+    /// Returns an error, not an empty list. An empty list would be
+    /// indistinguishable from a successful scan that found no networks.
     pub async fn scan(&self) -> Result<Vec<CellularNetwork>> {
-        debug!("Scanning cellular networks");
-        Ok(vec![])
+        Err(unavailable("cellular", "scan"))
+    }
+}
+
+impl Default for CellularInterface {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -133,9 +168,15 @@ impl RfInterface {
         Self
     }
 
-    pub async fn scan_frequencies(&self, start: u32, end: u32) -> Result<Vec<RfSignal>> {
-        debug!("Scanning RF: {} - {} Hz", start, end);
-        Ok(vec![])
+    /// Returns an error, not an empty spectrum.
+    pub async fn scan_frequencies(&self, _start: u32, _end: u32) -> Result<Vec<RfSignal>> {
+        Err(unavailable("rf", "scan_frequencies"))
+    }
+}
+
+impl Default for RfInterface {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -164,14 +205,22 @@ impl SensorInterface {
         Self
     }
 
+    /// Returns an error, never a fabricated reading. A plausible value such as
+    /// `(0.0, 0.0, 9.8)` would be indistinguishable from a real measurement.
     pub async fn read_accelerometer(&self) -> Result<(f64, f64, f64)> {
-        debug!("Reading accelerometer");
-        Ok((0.0, 0.0, 9.8))
+        Err(unavailable("sensors", "read_accelerometer"))
     }
 
+    /// Returns an error, never `(0.0, 0.0)`, which is a real location in the
+    /// Gulf of Guinea and could be mistaken for a genuine fix.
     pub async fn read_gps(&self) -> Result<(f64, f64)> {
-        debug!("Reading GPS");
-        Ok((0.0, 0.0))
+        Err(unavailable("sensors", "read_gps"))
+    }
+}
+
+impl Default for SensorInterface {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -206,16 +255,30 @@ impl HardwareManager {
         }
     }
 
+    /// Report adapter availability at startup.
+    ///
+    /// This never fails the daemon: absent hardware is a normal condition. It
+    /// does state plainly that no driver is installed, so logs cannot be read as
+    /// evidence that hardware was initialised.
     pub async fn initialize(&self) -> Result<()> {
-        info!("Initializing hardware manager");
-        // Would initialize each interface
+        for status in self.status().await {
+            if status.state == "available" {
+                info!(
+                    adapter = %status.adapter,
+                    "{} (device node present; no driver implemented)",
+                    status.detail
+                );
+            } else {
+                warn!(adapter = %status.adapter, "{}", status.detail);
+            }
+        }
         Ok(())
     }
 
     /// Report only verified adapter availability; unsupported adapters never claim readiness.
     pub async fn status(&self) -> Vec<HardwareAdapterStatus> {
         let serial = self.serial.read().await;
-        let serial_exists = std::path::Path::new(&serial.port).exists();
+        let serial_exists = serial.device_node_exists();
         vec![
             HardwareAdapterStatus {
                 adapter: "serial".into(),
@@ -225,7 +288,17 @@ impl HardwareManager {
                     "unavailable"
                 }
                 .into(),
-                detail: format!("configured path: {}", serial.port),
+                detail: if serial_exists {
+                    format!(
+                        "configured path: {} (device node exists; no production driver is implemented)",
+                        serial.port()
+                    )
+                } else {
+                    format!(
+                        "configured path: {} (not present; no production driver is implemented)",
+                        serial.port()
+                    )
+                },
             },
             HardwareAdapterStatus {
                 adapter: "gpio".into(),
@@ -268,5 +341,108 @@ impl HardwareManager {
 
     pub fn sensors(&self) -> Arc<RwLock<SensorInterface>> {
         Arc::clone(&self.sensors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn serial_write_and_read_fail_instead_of_faking_success() {
+        let serial = SerialInterface::new("/dev/definitely-not-a-real-janus-port");
+        assert!(serial.write(b"payload").await.is_err());
+        let mut buffer = [0_u8; 8];
+        assert!(serial.read(&mut buffer).await.is_err());
+        // The buffer must not be populated with invented data.
+        assert_eq!(buffer, [0_u8; 8]);
+    }
+
+    #[tokio::test]
+    async fn serial_open_fails_because_no_driver_exists() {
+        let mut serial = SerialInterface::new("/dev/definitely-not-a-real-janus-port");
+        assert!(serial.open().await.is_err());
+    }
+
+    #[test]
+    fn serial_availability_reflects_the_device_node_only() {
+        let absent = SerialInterface::new("/dev/definitely-not-a-real-janus-port");
+        assert!(!absent.available(), "a missing device node is not available");
+
+        // A path that really exists reports available, which is a path fact and
+        // not a claim that I/O works.
+        let present = SerialInterface::new("/dev/null");
+        if std::path::Path::new("/dev/null").exists() {
+            assert!(present.available());
+        }
+    }
+
+    #[tokio::test]
+    async fn gpio_operations_fail() {
+        let mut gpio = GpioInterface::new();
+        assert!(gpio.set_pin(1, true).await.is_err());
+        assert!(gpio.read_pin(1).await.is_err());
+        assert!(!gpio.available());
+    }
+
+    #[tokio::test]
+    async fn cellular_scan_errors_rather_than_returning_an_empty_scan() {
+        let cellular = CellularInterface::new();
+        assert!(cellular.scan().await.is_err());
+        assert!(!cellular.available());
+    }
+
+    #[tokio::test]
+    async fn rf_scan_errors_rather_than_returning_an_empty_spectrum() {
+        let rf = RfInterface::new();
+        assert!(rf.scan_frequencies(400_000_000, 500_000_000).await.is_err());
+        assert!(!rf.available());
+    }
+
+    #[tokio::test]
+    async fn sensors_never_return_fabricated_readings() {
+        let sensors = SensorInterface::new();
+        assert!(sensors.read_accelerometer().await.is_err());
+        assert!(sensors.read_gps().await.is_err());
+        assert!(!sensors.available());
+    }
+
+    #[tokio::test]
+    async fn status_never_claims_an_unimplemented_adapter_is_ready() {
+        let manager = HardwareManager::new(Some(
+            "/dev/definitely-not-a-real-janus-port".to_string(),
+        ));
+        let statuses = manager.status().await;
+        assert_eq!(statuses.len(), 5);
+        for status in &statuses {
+            assert_ne!(
+                status.state, "ready",
+                "{} must not report ready",
+                status.adapter
+            );
+            if status.adapter != "serial" {
+                assert_eq!(status.state, "unsupported");
+            } else {
+                assert_eq!(status.state, "unavailable");
+            }
+            assert!(
+                status.detail.to_lowercase().contains("no production")
+                    || status.detail.to_lowercase().contains("not present"),
+                "{} detail must explain the absence of a driver: {}",
+                status.adapter,
+                status.detail
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn initialize_succeeds_without_hardware_but_claims_nothing() {
+        let manager = HardwareManager::new(Some(
+            "/dev/definitely-not-a-real-janus-port".to_string(),
+        ));
+        // Absent hardware is normal and must not abort startup.
+        assert!(manager.initialize().await.is_ok());
+        // ...and it must not make any adapter appear usable.
+        assert!(manager.status().await.iter().all(|s| s.state != "ready"));
     }
 }

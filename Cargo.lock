@@ -1140,8 +1140,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "chrono",
  "clap",
+ "ed25519-dalek",
  "janus-core",
  "machine-uid",
  "mlua 0.9.9",

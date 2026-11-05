@@ -170,11 +170,50 @@ async function runModule(factory, file, args, approvedRoots) {
   r = await runModule(factory, path.join(MODULES, 'evidence_list.lua'), { path: outside }, [root]);
   check('refuses listing outside scope', !r.ok, r.error);
 
+  console.log('\n== evidence.read ==');
+  r = await runModule(factory, path.join(MODULES, 'evidence_read.lua'), { path: evidenceFile }, [root]);
+  check('reads a real approved file as hex', r.ok && r.result && r.result.hex === '616263', JSON.stringify(r.result || r.error).slice(0, 200));
+  r = await runModule(factory, path.join(MODULES, 'evidence_read.lua'), { path: evidenceFile, offset: 1, length: 2 }, [root]);
+  check('honours offset and length', r.ok && r.result && r.result.hex === '6263' && r.result.bytes_read === 2);
+  r = await runModule(factory, path.join(MODULES, 'evidence_read.lua'), { path: path.join(outside, 'secret.bin') }, [root]);
+  check('refuses read outside scope', !r.ok, r.error);
+  r = await runModule(factory, path.join(MODULES, 'evidence_read.lua'), { path: evidenceFile, length: 0 }, [root]);
+  check('refuses zero-length read', !r.ok, r.error);
+  r = await runModule(factory, path.join(MODULES, 'evidence_read.lua'), { path: evidenceFile, offset: -1 }, [root]);
+  check('refuses negative offset', !r.ok, r.error);
+
+  console.log('\n== evidence.manifest (chain of custody) ==');
+  r = await runModule(factory, path.join(MODULES, 'evidence_manifest.lua'), { path: root }, [root]);
+  check('hashes every file in an approved directory', r.ok && r.result && r.result.file_count === 2, JSON.stringify(r.result || r.error).slice(0, 250));
+  check('manifest hashes match real content', r.ok && r.result && r.result.files &&
+    r.result.files.find(f => f.name === 'evidence.bin' && f.sha256 === expectedSha) !== undefined);
+  check('reports total bytes', r.ok && r.result && r.result.total_bytes === 4);
+  check('returns files as an array', r.ok && r.result && Array.isArray(r.result.files));
+  r = await runModule(factory, path.join(MODULES, 'evidence_manifest.lua'), { path: outside }, [root]);
+  check('refuses manifest outside scope', !r.ok, r.error);
+
+  // A symlink pointing outside the approved root must be recorded, not followed.
+  const linkPath = path.join(root, 'escape.lnk');
+  let symlinkCreated = false;
+  try { fs.symlinkSync(path.join(outside, 'secret.bin'), linkPath); symlinkCreated = true; } catch (_) {}
+  if (symlinkCreated) {
+    r = await runModule(factory, path.join(MODULES, 'evidence_manifest.lua'), { path: root }, [root]);
+    const leaked = r.ok && r.result && r.result.files &&
+      r.result.files.some(f => f.name === 'escape.lnk');
+    check('manifest never follows a symlink out of scope', r.ok && !leaked, JSON.stringify(r.result || r.error).slice(0, 250));
+    const recorded = r.ok && r.result && r.result.skipped &&
+      r.result.skipped.some(s => s.name === 'escape.lnk' && s.reason === 'symlink_not_followed');
+    check('manifest records the skipped symlink honestly', r.ok && recorded);
+    fs.unlinkSync(linkPath);
+  }
+
   console.log('\n== read-only guarantee ==');
   const before = crypto.createHash('sha256').update(fs.readFileSync(evidenceFile)).digest('hex');
   await runModule(factory, path.join(MODULES, 'evidence_hash.lua'), { path: evidenceFile }, [root]);
   await runModule(factory, path.join(MODULES, 'evidence_stat.lua'), { path: evidenceFile }, [root]);
   await runModule(factory, path.join(MODULES, 'evidence_list.lua'), { path: root }, [root]);
+  await runModule(factory, path.join(MODULES, 'evidence_read.lua'), { path: evidenceFile }, [root]);
+  await runModule(factory, path.join(MODULES, 'evidence_manifest.lua'), { path: root }, [root]);
   const after = crypto.createHash('sha256').update(fs.readFileSync(evidenceFile)).digest('hex');
   check('evidence file is unchanged after all operations', before === after);
   check('no new files were created in the evidence root', fs.readdirSync(root).length === 2);

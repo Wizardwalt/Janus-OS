@@ -90,8 +90,9 @@ makes the dashboard work on Replit and behind HTTPS. Override the upstream with
 - Module certification bound to a SHA-256 content hash; editing a module
   invalidates its certification.
 - Organization-scoped audit trail, including denied execution attempts.
-- **Read-only evidence collection** (`plugins/evidence_readonly/`): real SHA-256,
-  `stat`, and directory listing, confined to approved paths after symlink
+- **Read-only evidence collection** (`plugins/evidence_readonly/`, 5 modules):
+  real SHA-256, `stat`, directory listing, bounded hex reads, and a
+  chain-of-custody manifest — all confined to approved paths after symlink
   resolution. See `janus-runtime/src/evidence.rs`.
 
 **Simulated or unavailable — never reported as working**
@@ -219,7 +220,7 @@ module ID and SHA-256 content hash; changing the file invalidates it.
 
 | Family | Status |
 |--------|--------|
-| `evidence_readonly` — hash, stat, list | Implemented and tested; awaiting reviewer sign-off |
+| `evidence_readonly` — hash, stat, list, read, manifest | Implemented and tested; awaiting reviewer sign-off |
 | Everything else | `pending_review` — not executable in production |
 
 Inventory without executing anything:
@@ -227,6 +228,17 @@ Inventory without executing anything:
 ```bash
 ./scripts/validate-modules.sh
 ```
+
+To produce the review sheet for the read-only family — exact module IDs, SHA-256
+hashes, and the API calls that would record a decision:
+
+```bash
+python3 scripts/certify-evidence.py            # review sheet
+python3 scripts/certify-evidence.py --curl     # + ready-to-run curl commands
+```
+
+This script **certifies nothing**. Read the code, then record `production_approved`
+through `POST /modules/certifications` as a user holding the Reviewer role.
 
 ---
 
@@ -263,6 +275,21 @@ npm run syntax          # compile-check every .lua file; executes nothing
 npm run test:evidence   # behaviour + scope tests for the read-only family
 npm run test:sandbox    # confirm io/os/package escapes are blocked
 ```
+
+One command runs everything available and reports honestly what it could not run:
+
+```bash
+./scripts/verify.sh
+```
+
+It prints a `PASS` / `FAIL` / `SKIP` line per check and ends with an explicit
+**NOT VERIFIED** list. Where no Rust toolchain exists, `cargo check` and
+`cargo test` are reported as **skipped, never as passed**. A separate structural
+check (`tools/audit/check_rust_structure.py`) verifies Rust delimiter balance; it
+is not a substitute for compiling.
+
+See [`docs/production/AUDIT-2026-11-05.md`](docs/production/AUDIT-2026-11-05.md)
+for the full audit, what was tested, and what remains unfinished.
 
 ---
 

@@ -23,6 +23,9 @@ mod lua;
 mod plugin;
 mod state;
 
+#[cfg(test)]
+mod integration_tests;
+
 /// Janus Runtime CLI arguments
 #[derive(Parser, Debug)]
 #[command(name = "janus-runtime")]
@@ -111,10 +114,16 @@ async fn main() -> Result<()> {
     hw_manager.initialize().await?;
     info!("Hardware manager initialized");
 
-    // Initialize Lua environment
+    // Initialize Lua environment. The core/ library is uncertified demo content
+    // and grants no production capability, so report counts rather than claiming
+    // that capabilities were initialised.
     let lua_env = lua::LuaEnv::new()?;
-    lua_env.load_core_modules(&config.core_modules_dir).await?;
-    info!("Lua environment initialized with core modules");
+    let core_report = lua_env.load_core_modules(&config.core_modules_dir).await?;
+    info!(
+        loaded = core_report.loaded,
+        failed = core_report.failed,
+        "Sandboxed Lua environment ready (core/ is uncertified demo content)"
+    );
 
     // Start API server
     let api_server = api::ApiServer::new(config.clone(), state_mgr, executor, Arc::new(hw_manager));

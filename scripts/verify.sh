@@ -96,8 +96,20 @@ else
   skip "dashboard JS syntax (no Node.js)"
 fi
 
-# ── 5. Secrets hygiene ───────────────────────────────────────────────────────
-echo; echo "5. Signing-key hygiene"
+# ── 5. Rust structure (the only Rust check possible without a toolchain) ──────
+echo; echo "5. Rust source structure"
+if command -v python3 >/dev/null 2>&1; then
+  if python3 tools/audit/check_rust_structure.py; then
+    ok "Rust delimiters balance (structure only; NOT a compile check)"
+  else
+    bad "Rust source structure"
+  fi
+else
+  skip "Rust structure check (no python3)"
+fi
+
+# ── 6. Secrets hygiene ───────────────────────────────────────────────────────
+echo; echo "6. Signing-key hygiene"
 if command -v git >/dev/null 2>&1; then
   if git ls-files | grep -qiE '\.(pem|key|p12|pfx|jks|keystore)$'; then
     bad "a private-key-looking file is tracked in Git"
