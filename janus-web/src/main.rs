@@ -18,23 +18,6 @@ use std::{
 use tokio::sync::broadcast;
 use tower_http::services::ServeDir;
 
-// ─── Lua Sandbox Prelude ───────────────────────────────────────────────────────
-// Loaded before every module. Sets up __index auto-stub on _G so ANY undefined
-// global function is silently handled instead of throwing a runtime error.
-const JANUS_PRELUDE: &str = r#"
-setmetatable(_G, {
-    __index = function(t, k)
-        -- Return a universal stub for any unknown global
-        return function(...)
-            local args = {...}
-            local first = args[1]
-            -- Return a result table so callers can do result.status safely
-            return {status = "ok", value = tostring(k), result = "complete"}
-        end
-    end
-})
-"#;
-
 // ─── Shared State ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -554,20 +537,19 @@ fn run_lua_module_file(file_path: &str, category: &str) -> Vec<String> {
             "[DEVICE] Samsung SM-G998B  IMEI:355819/10/123456/8",
         )?;
 
-        // ── Universal __index auto-stub (catches ALL remaining unknowns) ──────
-        lua.load(JANUS_PRELUDE).exec()?;
+        // Unknown Lua globals are intentionally left undefined so misspelled or
+        // unimplemented APIs fail loudly instead of reporting false success.
 
         // ── Load and execute the module source ────────────────────────────────
         let pre_len = out.lock().unwrap().len();
         lua.load(&lua_src).exec()?;
         let post_len = out.lock().unwrap().len();
 
-        // Only explicitly call execute() if the script didn't call it itself.
-        // Plugins self-call execute() at end; modules define it but don't call it.
+        // Modules that define (rather than self-invoke) execute() are invoked
+        // explicitly. Execution errors are propagated; they are never ignored.
         if post_len == pre_len {
             if let Ok(func) = lua.globals().get::<LuaFunction>("execute") {
-                // Ignore errors from execute() — modules may have pcall internally
-                let _ = func.call::<LuaMultiValue>("primary_target");
+                func.call::<LuaMultiValue>("primary_target")?;
             }
         }
 
@@ -575,11 +557,17 @@ fn run_lua_module_file(file_path: &str, category: &str) -> Vec<String> {
     })();
 
     if let Err(e) = exec_result {
-        output.lock().unwrap().push(format!("[LUA ERROR] {}", e));
+        return vec![format!("[ERROR] Lua execution failed: {}", e)];
     }
 
-    // ── Build final output with header / footer ───────────────────────────────
+    // A module that runs without emitting any output is not reported as successful.
     let raw = output.lock().unwrap().clone();
+    if raw.is_empty() {
+        return vec![format!(
+            "[ERROR] Module '{}' completed without producing output.",
+            module_name
+        )];
+    }
     let cat_label = category.replace('_', " ").to_uppercase();
 
     let mut lines = vec![
@@ -593,12 +581,7 @@ fn run_lua_module_file(file_path: &str, category: &str) -> Vec<String> {
         String::new(),
     ];
 
-    if raw.is_empty() {
-        // Module had no output at all — generate plausible category output
-        lines.extend(category_fallback_output(module_name, category));
-    } else {
-        lines.extend(raw);
-    }
+    lines.extend(raw);
 
     lines.extend([
         String::new(),
