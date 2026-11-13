@@ -88,6 +88,20 @@ impl PluginLoader {
     async fn load_plugin_file(&mut self, path: &Path) -> Result<()> {
         let code = tokio::fs::read_to_string(path).await?;
         let manifest = extract_manifest_from_lua(&code, path)?;
+        let id = manifest.id.trim();
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'))
+        {
+            anyhow::bail!(
+                "invalid plugin ID {:?}; use only ASCII letters, digits, '.', '_' or '-'",
+                manifest.id
+            );
+        }
+        if self.plugins.contains_key(id) {
+            anyhow::bail!("duplicate plugin ID {:?}; refusing to replace an already loaded plugin", id);
+        }
 
         let source = PluginSource {
             manifest: manifest.clone(),
@@ -177,6 +191,67 @@ fn extract_manifest_from_lua(code: &str, path: &Path) -> Result<PluginManifest> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn duplicate_plugin_ids_are_rejected_without_replacing_the_first_plugin() {
+        let root = std::env::temp_dir().join(format!("janus-plugin-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let first = root.join("first.lua");
+        let second = root.join("second.lua");
+        let source = r#"--[{
+  "id": "shared_plugin",
+  "name": "Shared Plugin",
+  "version": "1.0.0",
+  "description": "Test plugin",
+  "author": "Test",
+  "priority": 1,
+  "capabilities": [],
+  "category": "test",
+  "status": "prototype"
+}]
+return "first"
+"#;
+        std::fs::write(&first, source).unwrap();
+        std::fs::write(&second, source.replace("return \"first\"", "return \"second\"")).unwrap();
+
+        let mut loader = PluginLoader::new(&root);
+        loader.load_plugin_file(&first).await.unwrap();
+        let error = loader.load_plugin_file(&second).await.unwrap_err();
+
+        assert!(error.to_string().contains("duplicate plugin ID"));
+        assert_eq!(loader.count(), 1);
+        assert_eq!(loader.get("shared_plugin").unwrap().path, first);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_plugin_ids_are_rejected() {
+        let root = std::env::temp_dir().join(format!("janus-plugin-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("invalid.lua");
+        let source = r#"--[{
+  "id": "../escape",
+  "name": "Invalid Plugin",
+  "version": "1.0.0",
+  "description": "Test plugin",
+  "author": "Test",
+  "priority": 1,
+  "capabilities": [],
+  "category": "test",
+  "status": "prototype"
+}]
+return true
+"#;
+        std::fs::write(&path, source).unwrap();
+
+        let mut loader = PluginLoader::new(&root);
+        let error = loader.load_plugin_file(&path).await.unwrap_err();
+
+        assert!(error.to_string().contains("invalid plugin ID"));
+        assert_eq!(loader.count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn test_extract_manifest() {
