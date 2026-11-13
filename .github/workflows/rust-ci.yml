@@ -46,6 +46,9 @@ jobs:
       - name: Cargo check (full workspace)
         run: cargo check --workspace
 
+      - name: Run workspace tests
+        run: cargo test --workspace
+
       - name: Verify web frontend files exist
         run: |
           echo "Checking required web assets..."
