@@ -842,15 +842,19 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
                             match inc.msg_type.as_str() {
 
                                 "get_modules" => {
-                                    if let Some(mods) = state.module_registry.get(&inc.category) {
-                                        let out = serde_json::to_string(&WsOutgoing {
-                                            msg_type: "module_list".into(),
-                                            modules:  Some(mods.clone()),
-                                            category: Some(inc.category.clone()),
-                                            line: None, text: None, status: None,
-                                        }).unwrap();
-                                        let _ = socket.send(Message::Text(out)).await;
-                                    }
+                                    // Always answer the request, including unknown or empty
+                                    // categories, so the UI never remains stuck in LOADING.
+                                    let modules = state.module_registry
+                                        .get(&inc.category)
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    let out = serde_json::to_string(&WsOutgoing {
+                                        msg_type: "module_list".into(),
+                                        modules: Some(modules),
+                                        category: Some(inc.category.clone()),
+                                        line: None, text: None, status: None,
+                                    }).unwrap();
+                                    let _ = socket.send(Message::Text(out)).await;
                                 }
 
                                 "run_module" => {
