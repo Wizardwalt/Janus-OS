@@ -7,7 +7,7 @@
 use anyhow::Result;
 use mlua::prelude::*;
 use mlua::HookTriggers;
-use std::path::Path;
+use std::{path::Path, sync::atomic::{AtomicU32, Ordering}};
 use tracing::{debug, error, warn};
 
 /// Runtime used only while core modules are being loaded during startup.
@@ -65,13 +65,13 @@ impl PluginSandbox {
         const INSTRUCTION_HOOK_INTERVAL: u32 = 1_000;
         const MAX_INSTRUCTIONS: u32 = 100_000;
         let lua = Lua::new();
-        let mut remaining_instructions = MAX_INSTRUCTIONS;
+        let remaining_instructions = AtomicU32::new(MAX_INSTRUCTIONS);
         lua.set_hook(
             HookTriggers::new().every_nth_instruction(INSTRUCTION_HOOK_INTERVAL),
             move |_, _| {
-                remaining_instructions = remaining_instructions
-                    .saturating_sub(INSTRUCTION_HOOK_INTERVAL);
-                if remaining_instructions == 0 {
+                let remaining = remaining_instructions
+                    .fetch_sub(INSTRUCTION_HOOK_INTERVAL, Ordering::Relaxed);
+                if remaining <= INSTRUCTION_HOOK_INTERVAL {
                     Err(LuaError::RuntimeError(
                         "plugin instruction limit exceeded".to_string(),
                     ))
