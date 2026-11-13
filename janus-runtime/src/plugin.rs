@@ -87,8 +87,8 @@ impl PluginLoader {
     /// Load single plugin file
     async fn load_plugin_file(&mut self, path: &Path) -> Result<()> {
         let code = tokio::fs::read_to_string(path).await?;
-        let manifest = extract_manifest_from_lua(&code, path)?;
-        let id = manifest.id.trim();
+        let mut manifest = extract_manifest_from_lua(&code, path)?;
+        let id = manifest.id.trim().to_string();
         if id.is_empty()
             || !id
                 .chars()
@@ -99,9 +99,10 @@ impl PluginLoader {
                 manifest.id
             );
         }
-        if self.plugins.contains_key(id) {
+        if self.plugins.contains_key(&id) {
             anyhow::bail!("duplicate plugin ID {:?}; refusing to replace an already loaded plugin", id);
         }
+        manifest.id = id;
 
         let source = PluginSource {
             manifest: manifest.clone(),
