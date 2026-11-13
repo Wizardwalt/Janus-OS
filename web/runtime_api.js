@@ -4,7 +4,13 @@
 
 class JanusRuntimeApi {
   constructor() {
-    this.baseUrl = localStorage.getItem('janus.runtimeUrl') || 'http://localhost:8080';
+    const savedUrl = localStorage.getItem('janus.runtimeUrl');
+    // Migrate the old localhost default: in hosted browsers, localhost refers
+    // to the operator's device, not the Janus server. /api is same-origin.
+    this.baseUrl = !savedUrl || savedUrl === 'http://localhost:8080'
+      ? `${window.location.origin}/api`
+      : savedUrl;
+    if (this.baseUrl !== savedUrl) localStorage.setItem('janus.runtimeUrl', this.baseUrl);
     this.token = sessionStorage.getItem('janus.sessionToken') || null;
   }
 
