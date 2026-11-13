@@ -7,11 +7,17 @@ A bootable Arch Linux forensics and intelligence platform. Rust web server, Andr
 ## Quick Start
 
 ```bash
-git clone https://github.com/Wizardwalt/Janus-Omega-OS
-cd Janus-Omega-OS
-cargo run --bin janus-web
+git clone https://github.com/Wizardwalt/Janus-OS.git
+cd Janus-OS
+bash scripts/run-janus.sh
 # Open http://localhost:5000
 ```
+
+The launcher builds and starts both services:
+- **Janus Runtime API:** `127.0.0.1:8080`
+- **Janus Web UI:** `0.0.0.0:5000`
+
+The browser reaches the protected runtime through the web server's same-origin `/api` proxy. You do not need to expose port 8080 publicly.
 
 **Requirements:** Rust stable 1.80+, pkg-config, OpenSSL, libudev
 
