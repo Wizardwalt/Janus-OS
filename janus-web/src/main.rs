@@ -1,10 +1,12 @@
 use axum::{
+    body::{to_bytes, Body},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
+    http::{header, Request, Response, StatusCode},
     response::IntoResponse,
-    routing::get,
+    routing::{any, get},
     Router,
 };
 use mlua::prelude::*;
@@ -27,6 +29,8 @@ struct GuiState {
     module_registry: Arc<HashMap<String, Vec<ModuleInfo>>>,
     /// The legacy Lua runner is available only when demo mode is explicitly enabled.
     demo_mode: bool,
+    /// Same-origin proxy to the authenticated production runtime API.
+    api_client: reqwest::Client,
 }
 
 #[derive(Clone, Serialize)]
@@ -936,6 +940,64 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
     }
 }
 
+// ─── Production Runtime API Proxy ──────────────────────────────────────────────
+
+/// Forward browser API requests to the loopback runtime so hosted deployments
+/// do not ask the user's browser to connect to its own localhost.
+async fn runtime_proxy(
+    State(state): State<GuiState>,
+    request: Request<Body>,
+) -> Result<Response<Body>, StatusCode> {
+    let method = reqwest::Method::from_bytes(request.method().as_str().as_bytes())
+        .map_err(|_| StatusCode::METHOD_NOT_ALLOWED)?;
+    if method != reqwest::Method::GET && method != reqwest::Method::POST {
+        return Err(StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/api");
+    let upstream_path = path_and_query
+        .strip_prefix("/api")
+        .filter(|path| !path.is_empty())
+        .unwrap_or("/");
+    let url = format!("http://127.0.0.1:8080{}", upstream_path);
+
+    let mut builder = state.api_client.request(method, url);
+    if let Some(value) = request.headers().get(header::AUTHORIZATION) {
+        builder = builder.header("authorization", value.to_str().map_err(|_| StatusCode::BAD_REQUEST)?);
+    }
+    if let Some(value) = request.headers().get(header::CONTENT_TYPE) {
+        builder = builder.header("content-type", value.to_str().map_err(|_| StatusCode::BAD_REQUEST)?);
+    }
+
+    let body = to_bytes(request.into_body(), 2 * 1024 * 1024)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if !body.is_empty() {
+        builder = builder.body(body.to_vec());
+    }
+
+    let upstream = builder.send().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let status = StatusCode::from_u16(upstream.status().as_u16())
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let content_type = upstream
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/json")
+        .to_owned();
+    let response_body = upstream.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(response_body))
+        .map_err(|_| StatusCode::BAD_GATEWAY)
+}
+
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -973,10 +1035,15 @@ async fn main() -> anyhow::Result<()> {
         aria_status,
         module_registry,
         demo_mode,
+        api_client: reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?,
     };
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/api/*path", any(runtime_proxy))
         .fallback_service(ServeDir::new("web"))
         .with_state(state);
 
