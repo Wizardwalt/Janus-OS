@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use mlua::prelude::*;
+use mlua::HookTriggers;
 use std::path::Path;
 use tracing::{debug, error, warn};
 
@@ -59,7 +60,26 @@ impl PluginSandbox {
     /// the global `args` table. No host filesystem, shell, or hardware APIs are
     /// registered here; production handlers must provide vetted capabilities.
     pub fn execute(&self, code: &str, args: serde_json::Value) -> Result<serde_json::Value> {
+        // Bound CPU work so an accidental or hostile infinite loop cannot
+        // monopolize a Tokio worker thread indefinitely.
+        const INSTRUCTION_HOOK_INTERVAL: u32 = 1_000;
+        const MAX_INSTRUCTIONS: u32 = 100_000;
         let lua = Lua::new();
+        let mut remaining_instructions = MAX_INSTRUCTIONS;
+        lua.set_hook(
+            HookTriggers::new().every_nth_instruction(INSTRUCTION_HOOK_INTERVAL),
+            move |_, _| {
+                remaining_instructions = remaining_instructions
+                    .saturating_sub(INSTRUCTION_HOOK_INTERVAL);
+                if remaining_instructions == 0 {
+                    Err(LuaError::RuntimeError(
+                        "plugin instruction limit exceeded".to_string(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        );
         let args_table = json_object_to_table(&lua, &args)?;
         lua.globals().set("args", args_table)?;
         let value = lua.load(code).eval::<LuaValue>()?;
@@ -121,4 +141,25 @@ fn lua_value_to_json(value: &LuaValue<'_>) -> Result<serde_json::Value> {
         }
         _ => serde_json::Value::Null,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_sandbox_returns_lua_values() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let result = sandbox
+            .execute("return { status = 'ok', count = args.count }", serde_json::json!({"count": 3}))
+            .unwrap();
+        assert_eq!(result, serde_json::json!({"status": "ok", "count": 3}));
+    }
+
+    #[test]
+    fn plugin_sandbox_stops_unbounded_instruction_loops() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let error = sandbox.execute("while true do end", serde_json::json!({})).unwrap_err();
+        assert!(error.to_string().contains("plugin instruction limit exceeded"));
+    }
 }
