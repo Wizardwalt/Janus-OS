@@ -2,9 +2,9 @@ name: JanusOS CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, repair/janus-os-full-repair ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, repair/janus-os-full-repair ]
 
 env:
   CARGO_TERM_COLOR: always
