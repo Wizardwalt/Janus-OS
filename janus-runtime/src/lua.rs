@@ -69,7 +69,19 @@ impl PluginSandbox {
         // Explicitly remove ambient loaders and process/debug libraries even if
         // the selected Lua build exposes them as safe standard globals.
         let globals = lua.globals();
-        for name in ["os", "io", "package", "debug", "require", "dofile", "loadfile", "load"] {
+        for name in [
+            "os",
+            "io",
+            "package",
+            "debug",
+            "require",
+            "dofile",
+            "loadfile",
+            "load",
+            "loadstring",
+            "coroutine",
+            "collectgarbage",
+        ] {
             globals.set(name, LuaValue::Nil)?;
         }
 
@@ -287,7 +299,7 @@ mod tests {
         let sandbox = PluginSandbox::new().unwrap();
         let result = sandbox
             .execute(
-                "return { os = type(os), io = type(io), package = type(package), debug = type(debug), require = type(require), dofile = type(dofile), loadfile = type(loadfile), load = type(load) }",
+                "return { os = type(os), io = type(io), package = type(package), debug = type(debug), require = type(require), dofile = type(dofile), loadfile = type(loadfile), load = type(load), loadstring = type(loadstring), coroutine = type(coroutine), collectgarbage = type(collectgarbage) }",
                 serde_json::json!({}),
             )
             .unwrap();
@@ -301,7 +313,10 @@ mod tests {
                 "require": "nil",
                 "dofile": "nil",
                 "loadfile": "nil",
-                "load": "nil"
+                "load": "nil",
+                "loadstring": "nil",
+                "coroutine": "nil",
+                "collectgarbage": "nil"
             })
         );
     }
