@@ -68,6 +68,18 @@ class JanusRuntimeApi {
   resetUserPassword(userId, password) { return this.request(`/auth/users/${encodeURIComponent(userId)}/password-reset`, { method: 'POST', body: JSON.stringify({ password }) }); }
   setEngagementActive(id, active) { return this.request(`/engagements/${encodeURIComponent(id)}/${active ? 'enable' : 'disable'}`, { method: 'POST' }); }
 
+  ownedDevices() { return this.request('/owner/devices'); }
+  registerOwnedDevice(deviceId, deviceType, password) {
+    return this.request('/owner/devices', {
+      method: 'POST', body: JSON.stringify({ device_id: deviceId, device_type: deviceType, password }),
+    });
+  }
+  updateOwnedDevicePolicy(deviceId, password, policies) {
+    return this.request(`/owner/devices/${encodeURIComponent(deviceId)}/policies`, {
+      method: 'POST', body: JSON.stringify({ password, policies }),
+    });
+  }
+
   execute(plugin, engagementId, targetAsset, args = {}) {
     return this.request('/execute', {
       method: 'POST',
