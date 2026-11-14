@@ -26,6 +26,7 @@ This document records the current repository evidence and implementation order. 
 6. Keep model providers replaceable through a provider-neutral adapter. Never put provider API keys in browser JavaScript or localStorage.
 7. Require explicit, scoped approval for privileged, destructive, privacy-sensitive, or externally consequential actions. Record an audit event and provide rollback where possible.
 8. Preserve user-approved identity and historical source material. Do not retroactively assign an acronym or persona detail without evidence.
+9. The purchaser is the device Owner and has full authority over documented, configurable security policies through a strongly authenticated Owner Console. Owner overrides must be explicit, scoped, and audited; they do not give ARIA or plugins Owner authority or remove core integrity guarantees.
 
 ## Ordered work
 
