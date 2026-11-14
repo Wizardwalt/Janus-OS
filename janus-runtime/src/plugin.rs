@@ -137,10 +137,16 @@ impl PluginLoader {
 fn collect_lua_paths(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        // Do not follow symlinks: plugin discovery must stay inside the
+        // configured tree and must not recurse through attacker-controlled links.
+        if file_type.is_dir() {
             paths.extend(collect_lua_paths(&path)?);
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("lua") {
+        } else if file_type.is_file()
+            && path.extension().and_then(|extension| extension.to_str()) == Some("lua")
+        {
             paths.push(path);
         }
     }
@@ -252,6 +258,27 @@ return true
         assert!(error.to_string().contains("invalid plugin ID"));
         assert_eq!(loader.count(), 0);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_discovery_does_not_follow_symlinked_files_or_directories() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("janus-plugin-links-{}", uuid::Uuid::new_v4()));
+        let external = std::env::temp_dir().join(format!("janus-plugin-external-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        let external_file = external.join("outside.lua");
+        std::fs::write(&external_file, "return 'outside'").unwrap();
+        symlink(&external, root.join("linked-directory")).unwrap();
+        symlink(&external_file, root.join("linked-file.lua")).unwrap();
+
+        let discovered = collect_lua_paths(&root).unwrap();
+        assert!(discovered.is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(external).unwrap();
     }
 
     #[test]
