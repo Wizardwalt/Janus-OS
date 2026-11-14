@@ -183,6 +183,7 @@ impl HardwareInterface for SensorInterface {
 
 /// Hardware manager coordinating all interfaces
 pub struct HardwareManager {
+    enabled: bool,
     serial: Arc<RwLock<SerialInterface>>,
     gpio: Arc<RwLock<GpioInterface>>,
     cellular: Arc<RwLock<CellularInterface>>,
@@ -191,9 +192,10 @@ pub struct HardwareManager {
 }
 
 impl HardwareManager {
-    pub fn new(serial_port: Option<String>) -> Self {
+    pub fn new(serial_port: Option<String>, enabled: bool) -> Self {
         let port = serial_port.unwrap_or_else(|| "/dev/ttyUSB0".to_string());
         Self {
+            enabled,
             serial: Arc::new(RwLock::new(SerialInterface::new(port))),
             gpio: Arc::new(RwLock::new(GpioInterface::new())),
             cellular: Arc::new(RwLock::new(CellularInterface::new())),
@@ -203,42 +205,48 @@ impl HardwareManager {
     }
 
     pub async fn initialize(&self) -> Result<()> {
-        info!("Initializing hardware manager");
-        // Would initialize each interface
+        if !self.enabled {
+            info!("Hardware integration is disabled by configuration");
+            return Ok(());
+        }
+        info!("Initializing hardware manager; adapters remain unavailable until real drivers are installed");
         Ok(())
     }
 
     /// Report only verified adapter availability; unsupported adapters never claim readiness.
     pub async fn status(&self) -> Vec<HardwareAdapterStatus> {
         let serial = self.serial.read().await;
+        let state = if self.enabled { "unsupported" } else { "disabled" };
+        let disabled_detail = "Hardware integration is disabled by system configuration.";
         vec![
             HardwareAdapterStatus {
                 adapter: "serial".into(),
-                state: "unsupported".into(),
-                detail: format!(
-                    "configured path: {}; a production serial driver is not implemented",
-                    serial.port
-                ),
+                state: state.into(),
+                detail: if self.enabled {
+                    format!("configured path: {}; a production serial driver is not implemented", serial.port)
+                } else {
+                    disabled_detail.into()
+                },
             },
             HardwareAdapterStatus {
                 adapter: "gpio".into(),
-                state: "unsupported".into(),
-                detail: "No production GPIO driver is installed.".into(),
+                state: state.into(),
+                detail: if self.enabled { "No production GPIO driver is installed.".into() } else { disabled_detail.into() },
             },
             HardwareAdapterStatus {
                 adapter: "cellular".into(),
-                state: "unsupported".into(),
-                detail: "No production cellular adapter is installed.".into(),
+                state: state.into(),
+                detail: if self.enabled { "No production cellular adapter is installed.".into() } else { disabled_detail.into() },
             },
             HardwareAdapterStatus {
                 adapter: "rf".into(),
-                state: "unsupported".into(),
-                detail: "No production RF adapter is installed.".into(),
+                state: state.into(),
+                detail: if self.enabled { "No production RF adapter is installed.".into() } else { disabled_detail.into() },
             },
             HardwareAdapterStatus {
                 adapter: "sensors".into(),
-                state: "unsupported".into(),
-                detail: "No production sensor adapter is installed.".into(),
+                state: state.into(),
+                detail: if self.enabled { "No production sensor adapter is installed.".into() } else { disabled_detail.into() },
             },
         ]
     }
@@ -290,9 +298,24 @@ mod tests {
 
     #[tokio::test]
     async fn hardware_status_never_reports_placeholder_adapters_as_ready() {
-        let manager = HardwareManager::new(Some("/dev/ttyJANUS_TEST".into()));
+        let manager = HardwareManager::new(Some("/dev/ttyJANUS_TEST".into()), true);
         let status = manager.status().await;
         assert_eq!(status.len(), 5);
         assert!(status.iter().all(|adapter| adapter.state == "unsupported"));
+    }
+}
+
+
+#[cfg(test)]
+mod hardware_configuration_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn disabled_hardware_integration_reports_disabled_for_every_adapter() {
+        let manager = HardwareManager::new(None, false);
+        manager.initialize().await.unwrap();
+        let status = manager.status().await;
+        assert_eq!(status.len(), 5);
+        assert!(status.iter().all(|adapter| adapter.state == "disabled"));
     }
 }
