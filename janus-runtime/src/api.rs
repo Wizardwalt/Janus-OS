@@ -835,6 +835,33 @@ async fn execute(
             }),
         );
     }
+    // The organization-wide add-on switch is persisted in runtime state. Missing
+    // state preserves existing installations; an explicit false disables execution.
+    let addons_key = StateKey::new("system", "addons_enabled");
+    match state.state_manager.get(&addons_key).await {
+        Ok(Some(value)) if value == serde_json::Value::Bool(false) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse {
+                    status: "error".into(),
+                    data: None,
+                    error: Some("Janus add-ons are disabled by the organization administrator".into()),
+                }),
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    status: "error".into(),
+                    data: None,
+                    error: Some(format!("could not verify add-on setting: {error}")),
+                }),
+            );
+        }
+    }
+
     let module_sha256 = match state.executor.plugin_sha256(&req.plugin) {
         Ok(hash) => hash,
         Err(error) => {
