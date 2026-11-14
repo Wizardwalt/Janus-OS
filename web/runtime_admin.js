@@ -22,8 +22,10 @@ async function refreshRuntimeAdminPanel() {
     addText(content, `LICENSE: ${license.plan} · ${license.enabled_features.join(', ')}`);
     // A missing setting means enabled for compatibility with existing installations.
     let addonsEnabled = true;
-    try { addonsEnabled = await window.janusRuntime.getState('system', 'addons_enabled'); }
-    catch (error) { if (error.status !== 404) throw error; }
+    try {
+      const savedAddonSetting = await window.janusRuntime.getState('system', 'addons_enabled');
+      addonsEnabled = savedAddonSetting !== false;
+    } catch (error) { if (error.status !== 404) throw error; }
     const addonRow = document.createElement('label');
     addonRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0;padding:8px;border:1px solid #75458b';
     const addonText = document.createElement('span');
