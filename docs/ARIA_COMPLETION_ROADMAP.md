@@ -4,7 +4,7 @@
 
 Complete ARIA as JanusOS's persistent, learning-capable, multi-device AI companion. This roadmap separates working behavior from interface simulations and keeps the original project vision intact while the historical LM Arena conversations are being recovered.
 
-This document records the current repository evidence and implementation order. It does not claim that planned capabilities already exist.
+This document records the current repository evidence and implementation order. It does not claim that planned capabilities already exist. The security baseline is defined in [ARIA_SECURITY_ARCHITECTURE.md](ARIA_SECURITY_ARCHITECTURE.md).
 
 ## Current verified state on `repair/janus-os-full-repair`
 
