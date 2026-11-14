@@ -596,6 +596,108 @@ impl StateManager {
         }))
     }
 
+    /// Issue a five-minute, owner- and device-bound proof-of-possession challenge.
+    pub async fn create_device_enrollment_challenge(
+        &self,
+        account: &janus_core::UserAccount,
+        device_id: &str,
+    ) -> Result<serde_json::Value> {
+        if !account.role.may_administer_organization() {
+            anyhow::bail!("only an organization administrator can enroll a device key");
+        }
+        let (organization_id, device_type, _) = self.db.get_owned_device(device_id, &account.id)?
+            .ok_or_else(|| anyhow::anyhow!("device is not registered to this owner"))?;
+        if organization_id != account.organization_id {
+            anyhow::bail!("device ownership organization mismatch");
+        }
+        let issued_at = chrono::Utc::now().timestamp();
+        let expires_at = issued_at + 300;
+        let challenge_id = uuid::Uuid::new_v4().to_string();
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let claims = crate::device_enrollment::EnrollmentClaims {
+            challenge_id: challenge_id.clone(),
+            nonce: nonce.clone(),
+            device_id: device_id.to_string(),
+            device_type: device_type.clone(),
+            owner_user_id: account.id.clone(),
+            issued_at_unix: issued_at,
+            expires_at_unix: expires_at,
+            protocol_version: 1,
+        };
+        // Validate the exact claims before persisting or returning them.
+        claims.signing_bytes()?;
+        self.db.create_device_enrollment_challenge(
+            &challenge_id, &nonce, device_id, &account.id, &device_type, issued_at, expires_at,
+        )?;
+        self.db.record(
+            AuditEntry::new(&account.id, "DEVICE_ENROLLMENT_CHALLENGE_ISSUED", device_id)
+                .success()
+                .with_metadata(serde_json::json!({"device_type": device_type, "expires_at_unix": expires_at})),
+        )?;
+        Ok(serde_json::json!({
+            "challenge_id": claims.challenge_id,
+            "nonce": claims.nonce,
+            "device_id": claims.device_id,
+            "device_type": claims.device_type,
+            "owner_user_id": claims.owner_user_id,
+            "issued_at_unix": claims.issued_at_unix,
+            "expires_at_unix": claims.expires_at_unix,
+            "protocol_version": claims.protocol_version
+        }))
+    }
+
+    /// Verify the device signature, then atomically consume the challenge and save
+    /// the public key. The private key never leaves the physical device.
+    pub async fn complete_device_enrollment(
+        &self,
+        account: &janus_core::UserAccount,
+        device_id: &str,
+        challenge_id: &str,
+        public_key: &str,
+        signature: &str,
+    ) -> Result<serde_json::Value> {
+        if !account.role.may_administer_organization() {
+            anyhow::bail!("only an organization administrator can complete device enrollment");
+        }
+        let (organization_id, device_type, _) = self.db.get_owned_device(device_id, &account.id)?
+            .ok_or_else(|| anyhow::anyhow!("device is not registered to this owner"))?;
+        if organization_id != account.organization_id {
+            anyhow::bail!("device ownership organization mismatch");
+        }
+        let (nonce, stored_type, stored_device, issued_at, expires_at) =
+            self.db.get_device_enrollment_challenge(challenge_id, &account.id, device_id)?
+                .ok_or_else(|| anyhow::anyhow!("challenge is missing, consumed, or not owned by this account"))?;
+        if stored_type != device_type || stored_device != device_id {
+            anyhow::bail!("enrollment challenge device binding mismatch");
+        }
+        let claims = crate::device_enrollment::EnrollmentClaims {
+            challenge_id: challenge_id.to_string(),
+            nonce,
+            device_id: device_id.to_string(),
+            device_type,
+            owner_user_id: account.id.clone(),
+            issued_at_unix: issued_at,
+            expires_at_unix: expires_at,
+            protocol_version: 1,
+        };
+        crate::device_enrollment::verify_device_proof(
+            &claims, public_key, signature, chrono::Utc::now().timestamp(),
+        )?;
+        let fingerprint = format!("{:x}", Sha256::digest(public_key.as_bytes()));
+        if !self.db.consume_device_enrollment_challenge(
+            challenge_id, &account.id, device_id, public_key, &fingerprint,
+            chrono::Utc::now().timestamp(),
+        )? {
+            anyhow::bail!("enrollment challenge expired or has already been consumed");
+        }
+        self.db.record(
+            AuditEntry::new(&account.id, "DEVICE_PUBLIC_KEY_ENROLLED", device_id)
+                .success()
+                .with_metadata(serde_json::json!({"key_fingerprint": fingerprint})),
+        )?;
+        Ok(serde_json::json!({"device_id": device_id, "key_fingerprint": fingerprint, "enrolled": true}))
+    }
+
     /// List only devices registered to the authenticated account.
     pub async fn owned_devices(
         &self,

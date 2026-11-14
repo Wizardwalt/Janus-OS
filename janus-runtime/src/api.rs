@@ -153,6 +153,13 @@ struct OwnerDeviceRegisterRequest { device_id: String, device_type: String, pass
 #[derive(Deserialize)]
 struct OwnerDevicePolicyRequest { password: String, policies: serde_json::Value }
 
+#[derive(Deserialize)]
+struct DeviceEnrollmentCompleteRequest {
+    challenge_id: String,
+    public_key: String,
+    signature: String,
+}
+
 #[derive(Serialize, Deserialize)]
 struct StateRequest {
     namespace: String,
@@ -221,6 +228,8 @@ impl ApiServer {
             .route("/auth/users/:user_id/enable", post(enable_user))
             .route("/owner/devices", get(list_owned_devices).post(register_owned_device))
             .route("/owner/devices/:device_id/policies", post(update_owned_device_policy))
+            .route("/owner/devices/:device_id/enrollment-challenge", post(create_device_enrollment_challenge))
+            .route("/owner/devices/:device_id/enrollment-complete", post(complete_device_enrollment))
             .route(
                 "/auth/users/:user_id/password-reset",
                 post(reset_user_password),
@@ -279,6 +288,33 @@ async fn register_owned_device(AxumState(state): AxumState<ApiState>, headers: H
     };
     match state.state_manager.register_owned_device(&account, &request.password, &request.device_id, &request.device_type).await {
         Ok(device) => (StatusCode::CREATED, Json(ApiResponse { status: "success".into(), data: Some(device), error: None })),
+        Err(error) => (StatusCode::FORBIDDEN, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
+    }
+}
+
+async fn create_device_enrollment_challenge(
+    AxumState(state): AxumState<ApiState>, headers: HeaderMap, Path(device_id): Path<String>,
+) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account, Err(error) => return unauthorized_response(error),
+    };
+    match state.state_manager.create_device_enrollment_challenge(&account, &device_id).await {
+        Ok(challenge) => (StatusCode::CREATED, Json(ApiResponse { status: "success".into(), data: Some(challenge), error: None })),
+        Err(error) => (StatusCode::FORBIDDEN, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
+    }
+}
+
+async fn complete_device_enrollment(
+    AxumState(state): AxumState<ApiState>, headers: HeaderMap, Path(device_id): Path<String>,
+    Json(request): Json<DeviceEnrollmentCompleteRequest>,
+) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account, Err(error) => return unauthorized_response(error),
+    };
+    match state.state_manager.complete_device_enrollment(
+        &account, &device_id, &request.challenge_id, &request.public_key, &request.signature,
+    ).await {
+        Ok(result) => (StatusCode::OK, Json(ApiResponse { status: "success".into(), data: Some(result), error: None })),
         Err(error) => (StatusCode::FORBIDDEN, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
     }
 }

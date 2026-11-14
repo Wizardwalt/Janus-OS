@@ -165,6 +165,31 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_owner_devices_owner
                 ON owner_devices(owner_user_id);
 
+            CREATE TABLE IF NOT EXISTS device_enrollment_challenges (
+                challenge_id TEXT PRIMARY KEY,
+                nonce TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                owner_user_id TEXT NOT NULL,
+                device_type TEXT NOT NULL CHECK (device_type IN ('monolith', 'pipboy')),
+                issued_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                consumed_at TEXT,
+                FOREIGN KEY (device_id) REFERENCES owner_devices(device_id),
+                FOREIGN KEY (owner_user_id) REFERENCES user_accounts(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_device_enrollment_expiry
+                ON device_enrollment_challenges(expires_at);
+
+            CREATE TABLE IF NOT EXISTS owner_device_keys (
+                device_id TEXT PRIMARY KEY,
+                owner_user_id TEXT NOT NULL,
+                public_key TEXT NOT NULL,
+                key_fingerprint TEXT NOT NULL,
+                enrolled_at TEXT NOT NULL,
+                FOREIGN KEY (device_id) REFERENCES owner_devices(device_id),
+                FOREIGN KEY (owner_user_id) REFERENCES user_accounts(id)
+            );
+
             CREATE TABLE IF NOT EXISTS operation_approvals (
                 id TEXT PRIMARY KEY,
                 engagement_id TEXT NOT NULL,
@@ -535,6 +560,69 @@ impl Database {
             params![device_id, organization_id, owner_user_id, device_type, policies_json, now],
         )?;
         Ok(())
+    }
+
+    /// Persist a short-lived enrollment challenge for an already owner-registered device.
+    pub fn create_device_enrollment_challenge(
+        &self,
+        challenge_id: &str,
+        nonce: &str,
+        device_id: &str,
+        owner_user_id: &str,
+        device_type: &str,
+        issued_at: i64,
+        expires_at: i64,
+    ) -> Result<()> {
+        self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?.execute(
+            "INSERT INTO device_enrollment_challenges (challenge_id, nonce, device_id, owner_user_id, device_type, issued_at, expires_at, consumed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+            params![challenge_id, nonce, device_id, owner_user_id, device_type, issued_at, expires_at],
+        )?;
+        Ok(())
+    }
+
+    /// Load challenge claims. Completion still has to atomically consume the row.
+    pub fn get_device_enrollment_challenge(
+        &self,
+        challenge_id: &str,
+        owner_user_id: &str,
+        device_id: &str,
+    ) -> Result<Option<(String, String, String, i64, i64)>> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let row = conn.query_row(
+            "SELECT nonce, device_type, device_id, issued_at, expires_at FROM device_enrollment_challenges WHERE challenge_id = ?1 AND owner_user_id = ?2 AND device_id = ?3 AND consumed_at IS NULL",
+            params![challenge_id, owner_user_id, device_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).optional()?;
+        Ok(row)
+    }
+
+    /// Consume a challenge exactly once and persist its public key in one transaction.
+    pub fn consume_device_enrollment_challenge(
+        &self,
+        challenge_id: &str,
+        owner_user_id: &str,
+        device_id: &str,
+        public_key: &str,
+        fingerprint: &str,
+        now_unix: i64,
+    ) -> Result<bool> {
+        let mut conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let tx = conn.transaction()?;
+        let changed = tx.execute(
+            "UPDATE device_enrollment_challenges SET consumed_at = ?1 WHERE challenge_id = ?2 AND owner_user_id = ?3 AND device_id = ?4 AND consumed_at IS NULL AND expires_at > ?5",
+            params![Utc::now().to_rfc3339(), challenge_id, owner_user_id, device_id, now_unix],
+        )?;
+        if changed != 1 {
+            return Ok(false);
+        }
+        // Do not silently replace an enrolled key. Key rotation needs its own
+        // explicit owner-authorized ceremony.
+        tx.execute(
+            "INSERT INTO owner_device_keys (device_id, owner_user_id, public_key, key_fingerprint, enrolled_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![device_id, owner_user_id, public_key, fingerprint, Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// Read an owned device only for its registered owner.
