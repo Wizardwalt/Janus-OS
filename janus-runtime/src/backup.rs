@@ -94,6 +94,21 @@ pub fn restore_encrypted_backup(
     let result = (|| -> Result<()> {
         write_new_file(&staging, &plaintext)?;
         let check = Connection::open(&staging)?;
+        // A replacement host must not inherit active sessions or physical-device trust.
+        // Preserve device ownership records, but require every device to prove possession
+        // of its key and complete enrollment again on the recovered host.
+        check.execute_batch("BEGIN IMMEDIATE")?;
+        for table in ["sessions", "device_enrollment_challenges", "owner_device_keys"] {
+            let exists: i64 = check.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [table],
+                |row| row.get(0),
+            )?;
+            if exists == 1 {
+                check.execute(&format!("DELETE FROM {table}"), [])?;
+            }
+        }
+        check.execute_batch("COMMIT")?;
         let integrity: String =
             check.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         if integrity != "ok" {
@@ -331,4 +346,33 @@ mod tests {
         assert!(!source.exists());
         assert!(!backup.exists());
     }
+    #[test]
+    fn recovery_invalidates_sessions_challenges_and_device_key_trust() {
+        let source = path("recovery-trust-src");
+        let encrypted = path("recovery-trust-enc");
+        let restored = path("recovery-trust-restored");
+        {
+            let db = Connection::open(&source).unwrap();
+            db.execute_batch(
+                "CREATE TABLE sessions(token_hash TEXT PRIMARY KEY);
+                 CREATE TABLE device_enrollment_challenges(challenge_id TEXT PRIMARY KEY);
+                 CREATE TABLE owner_device_keys(device_id TEXT PRIMARY KEY);",
+            ).unwrap();
+            db.execute("INSERT INTO sessions VALUES ('old-session')", []).unwrap();
+            db.execute("INSERT INTO device_enrollment_challenges VALUES ('old-challenge')", []).unwrap();
+            db.execute("INSERT INTO owner_device_keys VALUES ('old-device')", []).unwrap();
+        }
+        create_encrypted_backup(&source, &encrypted, &[6u8; 32]).unwrap();
+        restore_encrypted_backup(&encrypted, &restored, &[6u8; 32]).unwrap();
+        let db = Connection::open(&restored).unwrap();
+        for table in ["sessions", "device_enrollment_challenges", "owner_device_keys"] {
+            let count: i64 = db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0)).unwrap();
+            assert_eq!(count, 0, "{table} must be cleared on recovery");
+        }
+        drop(db);
+        for file in [source, encrypted, restored] {
+            let _ = fs::remove_file(file);
+        }
+    }
+
 }

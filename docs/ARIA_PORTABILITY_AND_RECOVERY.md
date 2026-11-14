@@ -10,7 +10,7 @@ This document is an architecture requirement, not a claim that full identity exp
 
 - The runtime can create encrypted, consistent SQLite snapshots using SQLite's online backup API, including committed WAL state.
 - Snapshots use XChaCha20-Poly1305 authenticated encryption and an owner-held 32-byte key supplied outside Janus.
-- The runtime provides an offline `restore-backup` command. It authenticates the encrypted file, checks SQLite integrity, and creates a new database path without overwriting an existing destination.
+- The runtime provides an offline `restore-backup` command. It authenticates the encrypted file, clears old login sessions, pending enrollment challenges, and device public-key trust bindings, checks SQLite integrity, and creates a new database path without overwriting an existing destination. Device ownership records remain, but devices must re-enroll.
 - Temporary plaintext snapshot and restore files are created with owner-only permissions on Unix. On other platforms, their permissions inherit the containing directory's security ACL.
 - A successful database restore is not yet a complete ARIA migration. Portable identity filtering, signed manifests, schema upgrade orchestration, artifact transfer, and device re-enrollment remain future work.
 
