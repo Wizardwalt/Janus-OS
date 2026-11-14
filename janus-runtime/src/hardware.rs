@@ -2,9 +2,13 @@
 
 use anyhow::Result;
 use serde::Serialize;
-use std::sync::Arc;
+use std::{
+    io::{Read, Write},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Honest adapter status returned to authenticated clients.
 #[derive(Debug, Clone, Serialize)]
@@ -26,30 +30,80 @@ pub trait HardwareInterface: Send + Sync {
 /// Serial port interface
 pub struct SerialInterface {
     port: String,
-    available: bool,
+    connection: Option<Arc<Mutex<Box<dyn serialport::SerialPort>>>>,
+    last_error: Option<String>,
 }
 
 impl SerialInterface {
     pub fn new(port: impl Into<String>) -> Self {
         Self {
             port: port.into(),
-            available: false,
+            connection: None,
+            last_error: None,
         }
     }
 
+    /// Open a configured serial device at 115200 baud with bounded IO timeouts.
     pub async fn open(&mut self) -> Result<()> {
-        anyhow::bail!(
-            "serial adapter is not implemented; refusing to report a simulated open for {}",
-            self.port
-        )
+        let port_name = self.port.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            serialport::new(port_name.clone(), 115_200)
+                .timeout(Duration::from_millis(500))
+                .open()
+                .map(|port| Arc::new(Mutex::new(port)))
+                .map_err(|error| anyhow::anyhow!("failed to open serial port {port_name}: {error}"))
+        })
+        .await?;
+
+        match result {
+            Ok(connection) => {
+                self.connection = Some(connection);
+                self.last_error = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.connection = None;
+                self.last_error = Some(error.to_string());
+                Err(error)
+            }
+        }
     }
 
-    pub async fn write(&self, _data: &[u8]) -> Result<usize> {
-        anyhow::bail!("serial adapter is not implemented; no bytes were written")
+    /// Write bytes to the connected serial device. No connection means an error.
+    pub async fn write(&self, data: &[u8]) -> Result<usize> {
+        let connection = self
+            .connection
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("serial port {} is not open", self.port))?;
+        let data = data.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let mut port = connection
+                .lock()
+                .map_err(|_| anyhow::anyhow!("serial port lock is poisoned"))?;
+            port.write_all(&data)?;
+            Ok(data.len())
+        })
+        .await?
     }
 
-    pub async fn read(&self, _buf: &mut [u8]) -> Result<usize> {
-        anyhow::bail!("serial adapter is not implemented; no device data was read")
+    /// Read up to the supplied buffer length; the serial driver's timeout bounds waiting.
+    pub async fn read(&self, buf: &mut [u8]) -> Result<usize> {
+        let connection = self
+            .connection
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("serial port {} is not open", self.port))?;
+        let capacity = buf.len();
+        let (count, data) = tokio::task::spawn_blocking(move || {
+            let mut data = vec![0; capacity];
+            let mut port = connection
+                .lock()
+                .map_err(|_| anyhow::anyhow!("serial port lock is poisoned"))?;
+            let count = port.read(&mut data)?;
+            Ok::<_, anyhow::Error>((count, data))
+        })
+        .await??;
+        buf[..count].copy_from_slice(&data[..count]);
+        Ok(count)
     }
 }
 
@@ -59,7 +113,7 @@ impl HardwareInterface for SerialInterface {
     }
 
     fn available(&self) -> bool {
-        self.available
+        self.connection.is_some()
     }
 }
 
@@ -184,6 +238,7 @@ impl HardwareInterface for SensorInterface {
 /// Hardware manager coordinating all interfaces
 pub struct HardwareManager {
     enabled: bool,
+    serial_configured: bool,
     serial: Arc<RwLock<SerialInterface>>,
     gpio: Arc<RwLock<GpioInterface>>,
     cellular: Arc<RwLock<CellularInterface>>,
@@ -193,9 +248,11 @@ pub struct HardwareManager {
 
 impl HardwareManager {
     pub fn new(serial_port: Option<String>, enabled: bool) -> Self {
+        let serial_configured = serial_port.is_some();
         let port = serial_port.unwrap_or_else(|| "/dev/ttyUSB0".to_string());
         Self {
             enabled,
+            serial_configured,
             serial: Arc::new(RwLock::new(SerialInterface::new(port))),
             gpio: Arc::new(RwLock::new(GpioInterface::new())),
             cellular: Arc::new(RwLock::new(CellularInterface::new())),
@@ -209,43 +266,67 @@ impl HardwareManager {
             info!("Hardware integration is disabled by configuration");
             return Ok(());
         }
-        info!("Initializing hardware manager; adapters remain unavailable until real drivers are installed");
+        if self.serial_configured {
+            let mut serial = self.serial.write().await;
+            if let Err(error) = serial.open().await {
+                warn!(%error, "Configured serial adapter could not be opened; runtime will continue without it");
+            }
+        } else {
+            info!("No serial port configured; serial adapter will remain inactive");
+        }
+        info!("Hardware manager initialized; unimplemented adapters remain unsupported");
         Ok(())
     }
 
     /// Report only verified adapter availability; unsupported adapters never claim readiness.
     pub async fn status(&self) -> Vec<HardwareAdapterStatus> {
         let serial = self.serial.read().await;
-        let state = if self.enabled { "unsupported" } else { "disabled" };
+        let other_state = if self.enabled { "unsupported" } else { "disabled" };
         let disabled_detail = "Hardware integration is disabled by system configuration.";
+        let serial_state = if !self.enabled {
+            "disabled"
+        } else if !self.serial_configured {
+            "not_configured"
+        } else if serial.available() {
+            "available"
+        } else {
+            "unavailable"
+        };
+        let serial_detail = if !self.enabled {
+            disabled_detail.to_string()
+        } else if !self.serial_configured {
+            "No serial port path was configured.".to_string()
+        } else if serial.available() {
+            format!("Connected to configured serial device: {}", serial.port)
+        } else {
+            serial.last_error.clone().unwrap_or_else(|| {
+                format!("Configured serial device {} has not been opened.", serial.port)
+            })
+        };
         vec![
             HardwareAdapterStatus {
                 adapter: "serial".into(),
-                state: state.into(),
-                detail: if self.enabled {
-                    format!("configured path: {}; a production serial driver is not implemented", serial.port)
-                } else {
-                    disabled_detail.into()
-                },
+                state: serial_state.into(),
+                detail: serial_detail,
             },
             HardwareAdapterStatus {
                 adapter: "gpio".into(),
-                state: state.into(),
+                state: other_state.into(),
                 detail: if self.enabled { "No production GPIO driver is installed.".into() } else { disabled_detail.into() },
             },
             HardwareAdapterStatus {
                 adapter: "cellular".into(),
-                state: state.into(),
+                state: other_state.into(),
                 detail: if self.enabled { "No production cellular adapter is installed.".into() } else { disabled_detail.into() },
             },
             HardwareAdapterStatus {
                 adapter: "rf".into(),
-                state: state.into(),
+                state: other_state.into(),
                 detail: if self.enabled { "No production RF adapter is installed.".into() } else { disabled_detail.into() },
             },
             HardwareAdapterStatus {
                 adapter: "sensors".into(),
-                state: state.into(),
+                state: other_state.into(),
                 detail: if self.enabled { "No production sensor adapter is installed.".into() } else { disabled_detail.into() },
             },
         ]
@@ -301,7 +382,8 @@ mod tests {
         let manager = HardwareManager::new(Some("/dev/ttyJANUS_TEST".into()), true);
         let status = manager.status().await;
         assert_eq!(status.len(), 5);
-        assert!(status.iter().all(|adapter| adapter.state == "unsupported"));
+        assert_eq!(status[0].state, "unavailable");
+        assert!(status.iter().skip(1).all(|adapter| adapter.state == "unsupported"));
     }
 }
 
