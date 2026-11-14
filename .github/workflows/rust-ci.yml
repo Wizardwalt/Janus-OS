@@ -68,6 +68,9 @@ jobs:
             node --check "$f"
           done
 
+      - name: Check launcher shell syntax
+        run: bash -n scripts/run-janus.sh
+
       - name: Count modules
         run: |
           LUA=$(find plugins/ modules/ core/ apocalypse_engineering/ -name "*.lua" 2>/dev/null | wc -l)
