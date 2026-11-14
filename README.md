@@ -103,7 +103,18 @@ ARIA's current chat replies and periodic thoughts are scripted interface text. T
 
 ### Hardware status
 
-The production hardware API reports an adapter as ready only after a real driver is implemented and can verify its state. Serial, GPIO, cellular, RF, and sensor operations currently return explicit unsupported errors rather than simulated success.
+The production hardware API reports an adapter as ready only after a real driver is connected and can verify its state.
+
+- **Serial:** real serial-port IO is implemented at 115200 baud with a 500 ms IO timeout. Configure a device path with `JANUS_SERIAL_PORT=/dev/ttyUSB0` before launching. Startup attempts to open only an explicitly configured path; failure leaves the adapter unavailable and does not prevent Janus from starting.
+- **GPIO, cellular, RF, and sensors:** drivers are not installed. Operations return explicit unsupported errors rather than simulated success.
+- **Disable hardware:** set `JANUS_HARDWARE_ENABLED=false` to disable all hardware integration.
+
+Examples:
+
+```bash
+JANUS_SERIAL_PORT=/dev/ttyUSB0 ./scripts/run-janus.sh
+JANUS_HARDWARE_ENABLED=false ./scripts/run-janus.sh
+```
 ---
 
 ## Development
