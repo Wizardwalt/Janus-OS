@@ -20,6 +20,27 @@ async function refreshRuntimeAdminPanel() {
     const [users, engagements, license] = await Promise.all([window.janusRuntime.users(), window.janusRuntime.engagements(), window.janusRuntime.licenseStatus()]);
     content.replaceChildren();
     addText(content, `LICENSE: ${license.plan} · ${license.enabled_features.join(', ')}`);
+    // A missing setting means enabled for compatibility with existing installations.
+    let addonsEnabled = true;
+    try { addonsEnabled = await window.janusRuntime.getState('system', 'addons_enabled'); }
+    catch (error) { if (error.status !== 404) throw error; }
+    const addonRow = document.createElement('label');
+    addonRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0;padding:8px;border:1px solid #75458b';
+    const addonText = document.createElement('span');
+    addonText.textContent = 'JANUS ADD-ONS · ' + (addonsEnabled ? 'ENABLED' : 'DISABLED');
+    const addonToggle = document.createElement('input');
+    addonToggle.type = 'checkbox'; addonToggle.checked = addonsEnabled;
+    addonToggle.setAttribute('aria-label', 'Enable Janus add-ons');
+    addonToggle.addEventListener('change', async () => {
+      addonToggle.disabled = true;
+      try {
+        await window.janusRuntime.setState('system', 'addons_enabled', addonToggle.checked);
+        await refreshRuntimeAdminPanel();
+      } catch (error) { addonToggle.checked = !addonToggle.checked; alert(error.message); }
+      finally { addonToggle.disabled = false; }
+    });
+    addonRow.append(addonText, addonToggle); content.appendChild(addonRow);
+    addText(content, 'Add-ons can be disabled while the Pip-Boy hardware is being built.', false);
     addText(content, 'USERS:', true);
     users.forEach(user => {
       const row = document.createElement('div'); row.style.margin = '4px 0';
