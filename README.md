@@ -79,10 +79,12 @@ Janus-Omega-OS/
 - **Contextual intelligence** — responds to forensics queries, network questions, casual conversation
 - **Idle thoughts** broadcast every 9 seconds
 
-### Module Launcher
-- **2,632 modules** across 17 categories executed by a real **Lua 5.4 VM** (`mlua`)
-- Live terminal output streamed line-by-line via **WebSocket** — every `print()`, `overseer_speak()`, `janus.log()` surfaces in real time
-- Android-style app tiles → module list → live terminal output
+### Module Library and Launcher
+
+- The repository contains a large Lua module library organized into categories.
+- The legacy Android-style module browser can enumerate these scripts. Its WebSocket runner is **demo-only** and requires `JANUS_DEMO_MODE=1`; simulated shell, ADB, and hardware calls are not real operations.
+- In production, the protected runtime loads plugins from the configured `plugins/` directory. Each request must pass account-role, organization add-on, engagement, asset, certification, and sandbox capability checks.
+- A module appearing in the legacy browser does not mean it is production-approved or executable through the protected runtime.
 
 ### Lua Sandbox APIs
 
@@ -91,7 +93,7 @@ The production runtime creates a fresh Lua VM for each plugin, applies an instru
 | Function | Behaviour |
 |----------|-----------|
 | `janus.log(msg)` | Writes a sanitized, length-limited message to the runtime log |
-| `args` | Read-only-by-convention JSON input supplied to the plugin |
+| `args` | Per-request JSON input; any Lua-side changes remain inside that execution |
 
 Plugins may declare capabilities in their manifest, but declarations are requests, not grants. Until a vetted implementation and administrator approval flow exist, production execution rejects every requested capability except `logging`. Shell, ADB, filesystem, network, and hardware access are not exposed by the production plugin sandbox.
 
