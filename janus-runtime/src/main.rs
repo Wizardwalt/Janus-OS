@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tracing::info;
 
 mod api;
+mod backup;
 mod database;
 pub mod device_enrollment;
 mod executor;
@@ -106,6 +107,9 @@ async fn main() -> Result<()> {
     // Open database
     let db = database::Database::open(&config.db_path)?;
     info!("Database opened: {}", config.db_path.display());
+
+    // Start encrypted automatic snapshots when an external recovery key is configured.
+    backup::start_automatic_backups(config.db_path.clone())?;
 
     // Initialize state manager
     let state_mgr = state::StateManager::new(&config, Arc::new(db)).await?;
