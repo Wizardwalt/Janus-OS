@@ -621,24 +621,35 @@ impl StateManager {
         password: &str,
         requested: serde_json::Value,
     ) -> Result<serde_json::Value> {
+        if !account.role.may_administer_organization() {
+            anyhow::bail!("only an organization administrator can change device security policies");
+        }
+        validate_owner_device_identity(device_id, "monolith")
+            .or_else(|_| validate_owner_device_identity(device_id, "pipboy"))?;
+        let changed_settings = requested
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("policies must be a JSON object"))?
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         let stored = self.db.find_user_by_email(&account.email)?
             .ok_or_else(|| anyhow::anyhow!("owner account was not found"))?;
-        if !janus_core::verify_password(password, &stored.password_hash)? {
+        if stored.account.id != account.id
+            || !janus_core::verify_password(password, &stored.password_hash)?
+        {
             self.db.record(
                 AuditEntry::new(&account.id, "DEVICE_POLICY_AUTH_FAILURE", device_id)
                     .failed("password re-authentication failed"),
             )?;
             anyhow::bail!("owner password verification failed");
         }
-        let (organization_id, device_type, _) = self.db.get_owned_device(device_id, &account.id)?
-            .ok_or_else(|| anyhow::anyhow!("device is not registered to this owner"))?;
+        let (organization_id, device_type, current_policies) =
+            self.db.get_owned_device(device_id, &account.id)?
+                .ok_or_else(|| anyhow::anyhow!("device is not registered to this owner"))?;
         if organization_id != account.organization_id {
             anyhow::bail!("device ownership organization mismatch");
         }
-        let policies = merge_owner_policy(
-            self.db.get_owned_device(device_id, &account.id)?.map(|row| row.2),
-            &requested,
-        )?;
+        let policies = merge_owner_policy(Some(current_policies), &requested)?;
         if !self.db.update_owned_device_policy(device_id, &account.id, &policies)? {
             anyhow::bail!("device policy update did not affect an owned device");
         }
@@ -647,7 +658,7 @@ impl StateManager {
                 .success()
                 .with_metadata(serde_json::json!({
                     "device_type": device_type,
-                    "changed_settings": object.keys().collect::<Vec<_>>(),
+                    "changed_settings": changed_settings,
                     "policies": policies
                 })),
         )?;
