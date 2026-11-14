@@ -86,33 +86,24 @@ Janus-Omega-OS/
 
 ### Lua Sandbox APIs
 
+The production runtime creates a fresh Lua VM for each plugin, applies an instruction limit, and exposes JSON input as `args`. The only host capability currently available is:
+
 | Function | Behaviour |
 |----------|-----------|
-| `print(...)` | Streamed to terminal |
-| `overseer_speak(msg)` | `[OVERSEER] msg` |
-| `janus.log(msg)` | `[JANUS] msg` |
-| `janus.shell(cmd)` | Simulated shell output |
-| `janus.adb(cmd)` | Simulated ADB output |
-| `log_to_blackbox(tbl)` | Flight recorder entry |
-| `read_rotary_dial()` | Hardware dial value (1–100) |
-| `wait_for_haptic_confirmation(n)` | Returns `true` (authorised) |
-| `perform_core_action(...)` | Core op → `{status="success"}` |
-| `perform_advanced_action(...)` | Advanced op → `{status="success"}` |
-| `perform_final_action(...)` | Terminal op → `{status="success"}` |
-| `unleash_god_tier_power(...)` | God-tier power stub |
-| `unleash_legendary_power(...)` | Legendary power stub |
-| Any unknown global | Auto-stubbed via `__index` on `_G` — no crashes |
+| `janus.log(msg)` | Writes a sanitized, length-limited message to the runtime log |
+| `args` | Read-only-by-convention JSON input supplied to the plugin |
 
-### Hardware Fleet
+Plugins may declare capabilities in their manifest, but declarations are requests, not grants. Until a vetted implementation and administrator approval flow exist, production execution rejects every requested capability except `logging`. Shell, ADB, filesystem, network, and hardware access are not exposed by the production plugin sandbox.
 
-| Device | Spec |
-|--------|------|
-| **Pandora Mk.1** | RP2040 USB glitcher / voltage injector |
-| **Pandora Omega** | Radxa CM5 cyberdeck (8-core, 16 GB RAM) |
-| **Pandora Titan** | 7" 21:9 forearm Pip-Boy · 5G/LTE · Wi-Fi 6E · IP68 · MIL-STD-810H |
+The legacy WebSocket Lua runner is available only when `JANUS_DEMO_MODE=1` is explicitly set. Its shell/ADB and hardware responses are simulations for UI development, not real device operations. Do not use demo output as evidence that a scan, extraction, or hardware action occurred.
 
-**Titan Exclusives:** Neural-Sync · AR-HUD · CBRN Suite · Kinetic Harvester · Ghost-Net mesh · Faraday cage · Quantum-resistant crypto · 24/7 blackbox recorder
+### ARIA status
 
+ARIA's current chat replies and periodic thoughts are scripted interface text. They do not represent a connected language model, live network monitoring, radio scanning, or persistent learning. Live AI integration and verified telemetry are future integrations; the interface must not present simulated text as operational results.
+
+### Hardware status
+
+The production hardware API reports an adapter as ready only after a real driver is implemented and can verify its state. Serial, GPIO, cellular, RF, and sensor operations currently return explicit unsupported errors rather than simulated success.
 ---
 
 ## Development
