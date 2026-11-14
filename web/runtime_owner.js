@@ -105,7 +105,7 @@ function createOwnerConsole() {
         card.append(password, save);
         list.appendChild(card);
       });
-      setStatus('Signed in as ' + user.email + '. Policy changes require password re-entry and are audited.');
+      setStatus('Signed in as ' + user.email + '. Password re-entry and audit logging are active. IMPORTANT: stored policy switches are not yet enforced by every runtime subsystem.');
     } catch (error) {
       button.style.display = 'block';
       setStatus('Owner console unavailable: ' + error.message, true);
