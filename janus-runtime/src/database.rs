@@ -151,6 +151,20 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
+            CREATE TABLE IF NOT EXISTS owner_devices (
+                device_id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                owner_user_id TEXT NOT NULL,
+                device_type TEXT NOT NULL CHECK (device_type IN ('monolith', 'pipboy')),
+                policies TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (organization_id) REFERENCES organizations(id),
+                FOREIGN KEY (owner_user_id) REFERENCES user_accounts(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_owner_devices_owner
+                ON owner_devices(owner_user_id);
+
             CREATE TABLE IF NOT EXISTS operation_approvals (
                 id TEXT PRIMARY KEY,
                 engagement_id TEXT NOT NULL,
@@ -502,6 +516,74 @@ impl Database {
                 params![token_hash],
             )?;
         Ok(())
+    }
+
+    /// Register a physical Janus device to the authenticated purchaser account.
+    /// The device ID is globally unique; an existing registration is never reassigned.
+    pub fn register_owner_device(
+        &self,
+        device_id: &str,
+        organization_id: &str,
+        owner_user_id: &str,
+        device_type: &str,
+        policies: &serde_json::Value,
+    ) -> Result<()> {
+        let policies_json = serde_json::to_string(policies)?;
+        let now = Utc::now().to_rfc3339();
+        self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?.execute(
+            "INSERT INTO owner_devices (device_id, organization_id, owner_user_id, device_type, policies, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![device_id, organization_id, owner_user_id, device_type, policies_json, now],
+        )?;
+        Ok(())
+    }
+
+    /// Read an owned device only for its registered owner.
+    pub fn get_owned_device(
+        &self,
+        device_id: &str,
+        owner_user_id: &str,
+    ) -> Result<Option<(String, String, serde_json::Value)>> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let row = conn.query_row(
+            "SELECT organization_id, device_type, policies FROM owner_devices WHERE device_id = ?1 AND owner_user_id = ?2",
+            params![device_id, owner_user_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+        ).optional()?;
+        row.map(|(organization_id, device_type, json)| {
+            Ok((organization_id, device_type, serde_json::from_str(&json)?))
+        }).transpose()
+    }
+
+    /// List devices owned by one account without exposing another account's devices.
+    pub fn list_owned_devices(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Vec<(String, String, serde_json::Value)>> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let mut statement = conn.prepare(
+            "SELECT device_id, device_type, policies FROM owner_devices WHERE owner_user_id = ?1 ORDER BY created_at",
+        )?;
+        let rows = statement.query_map(params![owner_user_id], |row| {
+            let json: String = row.get(2)?;
+            let policies = serde_json::from_str(&json).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            Ok((row.get(0)?, row.get(1)?, policies))
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Replace a registered device's configurable policy only when called by its owner.
+    pub fn update_owned_device_policy(
+        &self,
+        device_id: &str,
+        owner_user_id: &str,
+        policies: &serde_json::Value,
+    ) -> Result<bool> {
+        let json = serde_json::to_string(policies)?;
+        let changed = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?.execute(
+            "UPDATE owner_devices SET policies = ?1, updated_at = ?2 WHERE device_id = ?3 AND owner_user_id = ?4",
+            params![json, Utc::now().to_rfc3339(), device_id, owner_user_id],
+        )?;
+        Ok(changed == 1)
     }
 
     /// Create or update a reviewer-approved module certification record.
