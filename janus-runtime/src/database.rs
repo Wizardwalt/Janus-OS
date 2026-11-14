@@ -190,6 +190,35 @@ impl Database {
                 FOREIGN KEY (owner_user_id) REFERENCES user_accounts(id)
             );
 
+            -- Opaque client-encrypted events are append-only and ordered per source device.
+            CREATE TABLE IF NOT EXISTS device_sync_events (
+                event_id TEXT PRIMARY KEY,
+                owner_user_id TEXT NOT NULL,
+                source_device_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL CHECK (sequence > 0),
+                event_type TEXT NOT NULL,
+                payload_ciphertext TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(owner_user_id, source_device_id, sequence),
+                FOREIGN KEY (source_device_id) REFERENCES owner_devices(device_id),
+                FOREIGN KEY (owner_user_id) REFERENCES user_accounts(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_device_sync_events_source_sequence
+                ON device_sync_events(owner_user_id, source_device_id, sequence);
+
+            CREATE TABLE IF NOT EXISTS device_sync_cursors (
+                owner_user_id TEXT NOT NULL,
+                target_device_id TEXT NOT NULL,
+                source_device_id TEXT NOT NULL,
+                last_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(owner_user_id, target_device_id, source_device_id),
+                FOREIGN KEY (target_device_id) REFERENCES owner_devices(device_id),
+                FOREIGN KEY (source_device_id) REFERENCES owner_devices(device_id),
+                FOREIGN KEY (owner_user_id) REFERENCES user_accounts(id)
+            );
+
             CREATE TABLE IF NOT EXISTS operation_approvals (
                 id TEXT PRIMARY KEY,
                 engagement_id TEXT NOT NULL,
@@ -672,6 +701,106 @@ impl Database {
             params![json, Utc::now().to_rfc3339(), device_id, owner_user_id],
         )?;
         Ok(changed == 1)
+    }
+
+    /// Append one immutable client-encrypted event. Exact retries are idempotent;
+    /// reuse of an event ID or sequence with different content is rejected.
+    pub fn append_device_sync_event(
+        &self,
+        event_id: &str,
+        owner_user_id: &str,
+        source_device_id: &str,
+        sequence: i64,
+        event_type: &str,
+        payload_ciphertext: &str,
+        payload_sha256: &str,
+    ) -> Result<bool> {
+        let mut conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let tx = conn.transaction()?;
+        let existing = tx.query_row(
+            "SELECT owner_user_id, source_device_id, sequence, event_type, payload_sha256 FROM device_sync_events WHERE event_id = ?1",
+            params![event_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)),
+        ).optional()?;
+        if let Some((owner, source, seq, kind, hash)) = existing {
+            if owner == owner_user_id && source == source_device_id && seq == sequence && kind == event_type && hash == payload_sha256 {
+                return Ok(false);
+            }
+            anyhow::bail!("event ID was already used for different content");
+        }
+        let last_sequence: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM device_sync_events WHERE owner_user_id = ?1 AND source_device_id = ?2",
+            params![owner_user_id, source_device_id],
+            |row| row.get(0),
+        )?;
+        if sequence != last_sequence + 1 {
+            anyhow::bail!("sync sequence must be the next contiguous value");
+        }
+        tx.execute(
+            "INSERT INTO device_sync_events (event_id, owner_user_id, source_device_id, sequence, event_type, payload_ciphertext, payload_sha256, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![event_id, owner_user_id, source_device_id, sequence, event_type, payload_ciphertext, payload_sha256, Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Read the next unacknowledged events from one source device for one target.
+    pub fn pending_device_sync_events(
+        &self,
+        owner_user_id: &str,
+        target_device_id: &str,
+        source_device_id: &str,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let cursor: i64 = conn.query_row(
+            "SELECT COALESCE((SELECT last_sequence FROM device_sync_cursors WHERE owner_user_id = ?1 AND target_device_id = ?2 AND source_device_id = ?3), 0)",
+            params![owner_user_id, target_device_id, source_device_id],
+            |row| row.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT event_id, sequence, event_type, payload_ciphertext, payload_sha256, created_at FROM device_sync_events WHERE owner_user_id = ?1 AND source_device_id = ?2 AND sequence > ?3 ORDER BY sequence LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(params![owner_user_id, source_device_id, cursor, limit], |row| {
+            Ok(serde_json::json!({
+                "event_id": row.get::<_, String>(0)?,
+                "sequence": row.get::<_, i64>(1)?,
+                "event_type": row.get::<_, String>(2)?,
+                "payload_ciphertext": row.get::<_, String>(3)?,
+                "payload_sha256": row.get::<_, String>(4)?,
+                "created_at": row.get::<_, String>(5)?
+            }))
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Advance a replica cursor only as far as an event actually present in the journal.
+    pub fn acknowledge_device_sync_events(
+        &self,
+        owner_user_id: &str,
+        target_device_id: &str,
+        source_device_id: &str,
+        last_sequence: i64,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let max_sequence: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM device_sync_events WHERE owner_user_id = ?1 AND source_device_id = ?2",
+            params![owner_user_id, source_device_id],
+            |row| row.get(0),
+        )?;
+        if last_sequence < 0 || last_sequence > max_sequence {
+            anyhow::bail!("sync acknowledgement is outside the available event range");
+        }
+        conn.execute(
+            "INSERT INTO device_sync_cursors (owner_user_id, target_device_id, source_device_id, last_sequence, updated_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(owner_user_id, target_device_id, source_device_id) DO UPDATE SET last_sequence = MAX(device_sync_cursors.last_sequence, excluded.last_sequence), updated_at = excluded.updated_at",
+            params![owner_user_id, target_device_id, source_device_id, last_sequence, Utc::now().to_rfc3339()],
+        )?;
+        let current: i64 = conn.query_row(
+            "SELECT last_sequence FROM device_sync_cursors WHERE owner_user_id = ?1 AND target_device_id = ?2 AND source_device_id = ?3",
+            params![owner_user_id, target_device_id, source_device_id],
+            |row| row.get(0),
+        )?;
+        Ok(current)
     }
 
     /// Create or update a reviewer-approved module certification record.

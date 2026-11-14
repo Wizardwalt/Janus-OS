@@ -160,6 +160,19 @@ struct DeviceEnrollmentCompleteRequest {
     signature: String,
 }
 
+#[derive(Deserialize)]
+struct DeviceSyncEventRequest {
+    event_id: String,
+    sequence: i64,
+    event_type: String,
+    payload_ciphertext: String,
+}
+
+#[derive(Deserialize)]
+struct DeviceSyncAckRequest {
+    last_sequence: i64,
+}
+
 #[derive(Serialize, Deserialize)]
 struct StateRequest {
     namespace: String,
@@ -230,6 +243,9 @@ impl ApiServer {
             .route("/owner/devices/:device_id/policies", post(update_owned_device_policy))
             .route("/owner/devices/:device_id/enrollment-challenge", post(create_device_enrollment_challenge))
             .route("/owner/devices/:device_id/enrollment-complete", post(complete_device_enrollment))
+            .route("/owner/devices/:device_id/sync/events", post(append_device_sync_event))
+            .route("/owner/devices/:device_id/sync/from/:source_device_id", get(pending_device_sync_events))
+            .route("/owner/devices/:device_id/sync/ack/:source_device_id", post(acknowledge_device_sync_events))
             .route(
                 "/auth/users/:user_id/password-reset",
                 post(reset_user_password),
@@ -314,6 +330,46 @@ async fn complete_device_enrollment(
     match state.state_manager.complete_device_enrollment(
         &account, &device_id, &request.challenge_id, &request.public_key, &request.signature,
     ).await {
+        Ok(result) => (StatusCode::OK, Json(ApiResponse { status: "success".into(), data: Some(result), error: None })),
+        Err(error) => (StatusCode::FORBIDDEN, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
+    }
+}
+
+async fn append_device_sync_event(
+    AxumState(state): AxumState<ApiState>, headers: HeaderMap, Path(device_id): Path<String>,
+    Json(request): Json<DeviceSyncEventRequest>,
+) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account, Err(error) => return unauthorized_response(error),
+    };
+    match state.state_manager.append_device_sync_event(
+        &account, &device_id, &request.event_id, request.sequence, &request.event_type, &request.payload_ciphertext,
+    ).await {
+        Ok(result) => (StatusCode::ACCEPTED, Json(ApiResponse { status: "success".into(), data: Some(result), error: None })),
+        Err(error) => (StatusCode::FORBIDDEN, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
+    }
+}
+
+async fn pending_device_sync_events(
+    AxumState(state): AxumState<ApiState>, headers: HeaderMap, Path((target_device_id, source_device_id)): Path<(String, String)>,
+) -> (StatusCode, Json<ApiResponse<Vec<serde_json::Value>>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account, Err(error) => return unauthorized_response(error),
+    };
+    match state.state_manager.pending_device_sync_events(&account, &target_device_id, &source_device_id, 100).await {
+        Ok(events) => (StatusCode::OK, Json(ApiResponse { status: "success".into(), data: Some(events), error: None })),
+        Err(error) => (StatusCode::FORBIDDEN, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
+    }
+}
+
+async fn acknowledge_device_sync_events(
+    AxumState(state): AxumState<ApiState>, headers: HeaderMap, Path((target_device_id, source_device_id)): Path<(String, String)>,
+    Json(request): Json<DeviceSyncAckRequest>,
+) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account, Err(error) => return unauthorized_response(error),
+    };
+    match state.state_manager.acknowledge_device_sync_events(&account, &target_device_id, &source_device_id, request.last_sequence).await {
         Ok(result) => (StatusCode::OK, Json(ApiResponse { status: "success".into(), data: Some(result), error: None })),
         Err(error) => (StatusCode::FORBIDDEN, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
     }
