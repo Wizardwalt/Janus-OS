@@ -8,6 +8,7 @@ use janus_core::{
     UserRole,
 };
 use rusqlite::{params, Connection, OptionalExtension};
+use sha2::Digest;
 use std::{path::Path, sync::Mutex};
 use tracing::debug;
 
