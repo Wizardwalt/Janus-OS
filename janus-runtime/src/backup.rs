@@ -46,7 +46,12 @@ pub fn restore_encrypted_backup(backup_path: &Path, destination: &Path, key: &[u
     let staging = sibling_temp_path(destination, "restore");
     let result = (|| -> Result<()> {
         write_new_file(&staging, &plaintext)?;
-        let check = Connection::open(&staging)?;
+        let mut check = Connection::open(&staging)?;
+        // A recovered host must not inherit live sessions or trust bindings from the lost host.
+        // Device public-key enrollment is intentionally cleared so every physical device re-enrolls.
+        check.execute_batch(
+            "BEGIN IMMEDIATE;\n             DELETE FROM sessions;\n             DELETE FROM device_enrollment_challenges;\n             DELETE FROM owner_device_keys;\n             COMMIT;"
+        )?;
         let integrity: String = check.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         if integrity != "ok" { bail!("restored SQLite database failed integrity_check: {integrity}"); }
         check.close().map_err(|(_, error)| error)?;
@@ -116,6 +121,24 @@ pub fn start_automatic_backups(database_path: PathBuf) -> Result<()> {
         let mut bytes=fs::read(&enc).unwrap(); let last=bytes.len()-1; bytes[last]^=0x80; fs::write(&enc,bytes).unwrap();
         assert!(restore_encrypted_backup(&enc,&dst,&[7u8;32]).is_err()); assert!(!dst.exists());
         for p in [src,enc,dst] { let _=fs::remove_file(p); }
+    }
+    #[test] fn restore_clears_sessions_and_device_trust_bindings() {
+        let src=path("sanitize-src"); let enc=path("sanitize-enc"); let dst=path("sanitize-dst");
+        {
+            let db=Connection::open(&src).unwrap();
+            db.execute_batch("CREATE TABLE sessions(token_hash TEXT PRIMARY KEY); CREATE TABLE device_enrollment_challenges(challenge_id TEXT PRIMARY KEY); CREATE TABLE owner_device_keys(device_id TEXT PRIMARY KEY);").unwrap();
+            db.execute("INSERT INTO sessions VALUES ('old-session')",[]).unwrap();
+            db.execute("INSERT INTO device_enrollment_challenges VALUES ('old-challenge')",[]).unwrap();
+            db.execute("INSERT INTO owner_device_keys VALUES ('old-device')",[]).unwrap();
+        }
+        create_encrypted_backup(&src,&enc,&[5u8;32]).unwrap();
+        restore_encrypted_backup(&enc,&dst,&[5u8;32]).unwrap();
+        let db=Connection::open(&dst).unwrap();
+        for table in ["sessions","device_enrollment_challenges","owner_device_keys"] {
+            let count:i64=db.query_row(&format!("SELECT COUNT(*) FROM {table}"),[],|r|r.get(0)).unwrap();
+            assert_eq!(count,0,"{table} should be cleared on recovery");
+        }
+        drop(db); for p in [src,enc,dst] { let _=fs::remove_file(p); }
     }
     #[test] fn restore_refuses_to_overwrite_existing_file() {
         let src=path("keep-src"); let enc=path("keep-enc"); let dst=path("keep-dst"); Connection::open(&src).unwrap().execute("CREATE TABLE t(id)",[]).unwrap();

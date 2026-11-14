@@ -33,6 +33,14 @@ struct Args {
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 
+    /// Restore an encrypted Janus database backup and exit without starting the runtime.
+    #[arg(long, value_name = "FILE")]
+    restore_backup: Option<PathBuf>,
+
+    /// New database path for --restore-backup (must not already exist).
+    #[arg(long, value_name = "FILE")]
+    restore_db_path: Option<PathBuf>,
+
     /// Plugin directory
     #[arg(short = 'p', long, value_name = "DIR")]
     plugin_dir: Option<PathBuf>,
@@ -73,6 +81,22 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     info!("Janus Runtime v{} starting", janus_core::VERSION);
+
+    if let Some(backup_path) = args.restore_backup.as_deref() {
+        let destination = args.restore_db_path.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--restore-db-path is required with --restore-backup"))?;
+        let encoded = std::env::var("JANUS_BACKUP_KEY")
+            .map_err(|_| anyhow::anyhow!("JANUS_BACKUP_KEY must contain the Base64 recovery key"))?;
+        use base64::Engine;
+        let key_bytes = base64::engine::general_purpose::STANDARD.decode(encoded.trim())?;
+        let key: [u8; 32] = key_bytes.try_into()
+            .map_err(|_| anyhow::anyhow!("JANUS_BACKUP_KEY must decode to exactly 32 bytes"))?;
+        backup::restore_encrypted_backup(backup_path, destination, &key)?;
+        info!("Recovery restore completed. Review hardware, re-enroll devices, and validate the host before normal startup.");
+        return Ok(());
+    } else if args.restore_db_path.is_some() {
+        return Err(anyhow::anyhow!("--restore-db-path can only be used with --restore-backup"));
+    }
 
     // Load configuration, optionally from the file supplied on the command line.
     let mut config = match args.config.as_deref() {

@@ -4,7 +4,7 @@
 
 ARIA must not be permanently tied to one Pip-Boy, one Monolith, one disk, or one operating-system installation. Her recoverable identity and learned state must be portable to another authorized Janus-OS host. A failed device must be replaceable without recreating ARIA or losing acknowledged memories.
 
-This document is an architecture requirement, not a claim that migration or replication is implemented in the current build.
+This document describes the full target architecture. The current implementation includes encrypted whole-database backup and a verified restore command; portable identity/memory export, independent replica orchestration, failover fencing, and Android migration are still incomplete.
 
 ## Operating model: local-first, replicated intelligence
 
@@ -46,6 +46,20 @@ Hardware drivers, live device handles, network credentials, session tokens, and 
 - Each active writer must hold a time-bounded, renewable lease with a monotonically increasing fencing epoch. A stale host must not overwrite newer state when it reconnects.
 - Merge independent append-only learning events by stable event ID and causal metadata. For conflicting profile/configuration edits, preserve both versions and require an explicit resolution policy rather than silently choosing one.
 - Failover must never silently discard queued local events. Synchronization should be resumable and idempotent.
+
+## Current implemented recovery slice
+
+The runtime can create encrypted local SQLite snapshots when configured with an externally held 32-byte key. Restore is available as a one-shot command:
+
+```sh
+JANUS_BACKUP_KEY='<base64-encoded-32-byte-recovery-key>' \
+  janus-runtime --restore-backup ./backups/example.janusbk \
+  --restore-db-path ./recovered/janus.db
+```
+
+The destination must not already exist. Restore authenticates/decrypts the backup, writes to a staging file, clears old login sessions, pending enrollment challenges, and enrolled device public-key bindings, runs SQLite integrity verification, then installs the database without overwriting an existing path. The recovered host must re-enroll its Monolith/Pip-Boy devices and re-detect hardware. Keep the original backup unchanged.
+
+This is a **full database disaster-recovery snapshot**, not yet a selective portable ARIA identity bundle. It can contain account records and organization data; protect the recovery key and restored database accordingly. A later portability phase must export only approved ARIA identity, memory, preferences, learning and sync data while excluding password hashes, sessions, host secrets and device bindings.
 
 ## Restore and migration workflow
 
