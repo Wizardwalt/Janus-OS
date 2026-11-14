@@ -50,6 +50,20 @@ Memory writes must be durable before ARIA says they were saved. Replication stat
 - Never let an AI-generated instruction elevate its own role, change policy, disable logging, or approve its own action.
 - Log security-relevant events without recording passwords, API keys, private keys, or unnecessary sensitive content.
 
+## Product owner authority and security overrides
+
+The person who purchases and initializes a Monolith or Pip-Boy is the **Owner** of that physical unit. Ownership is established during first-run setup using a one-time enrollment ceremony and a recovery method controlled by the purchaser; it is not inferred from possession of a network connection or a normal user account. Each unit has its own owner record. If the same person owns both units, they may pair them and manage both from one owner console, while each unit remains independently recoverable.
+
+The Owner has the highest administrative authority over that unit's **configurable security settings**. Through an explicit Owner Security Console, the Owner can review and change device access rules, user roles, module/tool permissions, approval requirements, network exposure, cloud-provider use, privacy settings, lockout policies, and other documented policy switches. Where a feature supports a stricter or more permissive mode, the Owner can choose the mode and see the consequences before applying it. Changes that could expose data, enable remote access, grant powerful capabilities, or reduce protection require fresh Owner authentication and a clear confirmation. The UI must identify the affected device(s), setting(s), scope, and risk.
+
+Owner overrides are real policy changes—not a hidden vendor backdoor and not authority granted to ARIA. ARIA, plugins, imported prompts, and ordinary users cannot impersonate the Owner, approve their own requests, or invoke the Owner override path. The Owner may delegate narrower administration to named accounts, but delegated administrators cannot transfer ownership or grant themselves Owner authority.
+
+**Break-glass recovery:** if normal login is unavailable, the Owner can recover administrative access using the configured recovery credential plus local physical presence on the affected device (or an explicitly enrolled hardware recovery key). Recovery rotates affected sessions and credentials, records a tamper-evident event, and notifies other paired devices when they reconnect. A lost device can be revoked from the paired unit or through the Owner's recovery process.
+
+**Non-bypassable integrity boundaries:** Owner control does not create a vendor or AI backdoor. No policy toggle may make model-generated text self-authorizing, permit ARIA to silently rewrite its own executable code or trusted policy, forge another user's identity, extract protected keys from secure storage, or erase/alter the security event history without leaving evidence. These are integrity guarantees, not ordinary feature restrictions. The Owner can choose to enable powerful tools for their own authenticated sessions, but those tools still execute through the broker, are scoped to the selected device and target, and produce an audit record. The system must clearly warn when an Owner-selected configuration materially weakens protection.
+
+**Ownership transfer / reset:** transfer requires explicit confirmation by the current Owner or the documented recovery procedure. It revokes old Owner and delegated credentials, disconnects paired devices, and securely resets private data/keys according to the selected retain-or-wipe flow. A factory reset must never silently preserve the prior Owner's authority.
+
 ## Learning and prompt-injection resistance
 
 Learning means proposing traceable updates to memory and knowledge—not rewriting executable code, system prompts, access-control policy, or its own trust boundary.
