@@ -60,6 +60,14 @@ jobs:
             fi
           done
 
+      - name: Check browser JavaScript syntax
+        run: |
+          for f in web/app.js web/aria*.js web/runtime_*.js; do
+            [ -f "$f" ] || continue
+            echo "Checking $f"
+            node --check "$f"
+          done
+
       - name: Count modules
         run: |
           LUA=$(find plugins/ modules/ core/ apocalypse_engineering/ -name "*.lua" 2>/dev/null | wc -l)
