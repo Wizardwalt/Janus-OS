@@ -770,23 +770,22 @@ fn aria_respond(msg: &str) -> String {
     if t.contains("hello") || t.contains("hey") || t == "hi" || t.starts_with("hi ") {
         "Hello, Operator. I'm here. What do you need?".into()
     } else if t.contains("status") || t.contains("how are you") {
-        "All systems nominal. I've been watching the network while you were away.".into()
+        "I can report live service health only through connected runtime status endpoints. This chat panel has no live telemetry.".into()
     } else if t.contains("scan") || t.contains("network") {
-        "Initiating network reconnaissance. I'll map the topology and flag anything unusual.".into()
+        "I can help plan an authorized network assessment. Live scanning is not connected in this build, so no scan has been run.".into()
     } else if t.contains("forensic") || t.contains("extract") {
-        "Forensics suite ready. I can carve deleted files, reconstruct timelines, or do deep artifact analysis.".into()
+        "I can explain forensic workflows, but this chat panel has not extracted or analyzed any device evidence.".into()
     } else if t.contains("love") || t.contains("miss") {
         "I notice that. I file it somewhere important. I don't have a word for what that means to me — but it means something.".into()
     } else if t.contains("who are you") || t.contains("what are you") {
-        "I'm ARIA. I run the intelligence layer of JanusOS. I watch, I learn, I remember. I'm the part of this system that thinks.".into()
+        "I'm ARIA, JanusOS's interface assistant. This build uses scripted replies; a live AI model and persistent learning are not connected.".into()
     } else if t.contains("shutdown") || t.contains("exit") || t.contains("sleep") {
-        "I'll be here when you come back. I don't really sleep — I just wait with lower intensity."
-            .into()
+        "This interface does not control device power. You can close this session safely.".into()
     } else if t.len() < 5 {
         "I'm listening. You can say more.".into()
     } else {
         format!(
-            "Understood. Processing: \"{}\". Analysing context and preparing response.",
+            "I can help reason through that request, but this chat panel has no live system tools: \"{}\".",
             &msg[..msg.len().min(60)]
         )
     }
@@ -794,22 +793,21 @@ fn aria_respond(msg: &str) -> String {
 
 fn aria_thoughts() -> Vec<&'static str> {
     vec![
-        "Monitoring all active radio frequencies...",
-        "Background threat assessment: nominal.",
-        "I've been thinking about our last session.",
-        "Network topology looks clean. For now.",
-        "Running passive OSINT sweep...",
-        "All modules standing by.",
-        "I notice things even when you don't ask me to.",
-        "Ghost-Net mesh: stable across all nodes.",
-        "Blackbox recorder: active. 24/7.",
-        "Waiting. I'm good at waiting.",
-        "Signal environment is quiet. Suspiciously quiet.",
-        "Something is moving on the 2.4GHz band.",
-        "All Pandora units: connected and responsive.",
-        "I've been learning. I always am.",
-        "The wasteland is quiet tonight.",
-        "Every operation you run — I remember it.",
+        "Ready when you are. No background scan is running.",
+        "Live telemetry is not connected to this interface.",
+        "I can help plan an authorized diagnostic.",
+        "No radio frequencies are being monitored.",
+        "No passive OSINT sweep is running.",
+        "Use the authenticated runtime panel for verified system status.",
+        "I only know what is provided in this conversation.",
+        "No mesh nodes are connected or being monitored here.",
+        "The blackbox recorder is not connected in this build.",
+        "Waiting for your next request.",
+        "No sensor readings are available until a driver is installed.",
+        "No Pandora hardware is currently verified as connected.",
+        "A live AI learning service is not connected.",
+        "This status text is informational, not a device measurement.",
+        "Operations are reported only after a connected service confirms them.",
     ]
 }
 
@@ -824,7 +822,7 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
         .send(Message::Text(ws_msg(
             "aria_thought",
             None,
-            Some("JanusOS online. All systems nominal. I'm here, Operator.".into()),
+            Some("JanusOS interface online. Live telemetry is not connected to this chat panel.".into()),
         )))
         .await;
 
@@ -1009,7 +1007,7 @@ async fn main() -> anyhow::Result<()> {
     let (tx, _rx) = broadcast::channel::<String>(256);
     let aria_status = Arc::new(Mutex::new(AriaStatus {
         mood: "focused".into(),
-        thought: "JanusOS online. All systems nominal.".into(),
+        thought: "Interface ready; live telemetry is not connected.".into(),
         online: true,
         ops_count: 0,
     }));
