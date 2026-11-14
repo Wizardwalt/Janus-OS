@@ -59,6 +59,8 @@ class JanusRuntimeApi {
   engagements() { return this.request('/engagements'); }
   licenseStatus() { return this.request('/licenses/status'); }
   auditLogs() { return this.request('/audit/logs'); }
+  getState(namespace, key) { return this.request(`/state/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`); }
+  setState(namespace, key, value) { return this.request(`/state/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`, { method: 'POST', body: JSON.stringify(value) }); }
   plugins() { return this.request('/plugins'); }
   hardwareStatus() { return this.request('/hardware/status'); }
   users() { return this.request('/auth/users'); }
