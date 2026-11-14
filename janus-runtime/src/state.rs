@@ -10,6 +10,54 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tracing::debug;
 
+const OWNER_POLICY_DEFAULTS: &[(&str, bool)] = &[
+    ("require_approval_for_sensitive", true),
+    ("remote_access_enabled", false),
+    ("cloud_provider_enabled", false),
+    ("microphone_enabled", false),
+    ("hardware_modules_enabled", false),
+    ("strict_mode", true),
+];
+
+fn validate_owner_device_identity(device_id: &str, device_type: &str) -> Result<()> {
+    let device_id = device_id.trim();
+    if !(8..=128).contains(&device_id.len())
+        || !device_id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        anyhow::bail!("device_id must be 8-128 ASCII letters, numbers, hyphens, or underscores");
+    }
+    if !matches!(device_type, "monolith" | "pipboy") {
+        anyhow::bail!("device_type must be 'monolith' or 'pipboy'");
+    }
+    Ok(())
+}
+
+fn merge_owner_policy(
+    current: Option<serde_json::Value>,
+    requested: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let object = requested.as_object()
+        .ok_or_else(|| anyhow::anyhow!("policies must be a JSON object"))?;
+    let allowed = OWNER_POLICY_DEFAULTS.iter().map(|(key, _)| *key).collect::<Vec<_>>();
+    if object.is_empty()
+        || object.keys().any(|key| !allowed.contains(&key.as_str()))
+        || object.values().any(|value| !value.is_boolean())
+    {
+        anyhow::bail!("policy updates must contain only allowlisted boolean settings");
+    }
+    let mut policies = current.unwrap_or_else(|| {
+        serde_json::Value::Object(OWNER_POLICY_DEFAULTS.iter()
+            .map(|(key, value)| ((*key).to_string(), serde_json::Value::Bool(*value)))
+            .collect())
+    });
+    let stored = policies.as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("stored device policy is invalid"))?;
+    for (key, value) in object {
+        stored.insert(key.clone(), value.clone());
+    }
+    Ok(policies)
+}
+
 /// Authenticated session returned only after password verification.
 pub struct LoginSession {
     pub token: String,
@@ -515,14 +563,7 @@ impl StateManager {
             anyhow::bail!("only an organization administrator can initialize device ownership");
         }
         let device_id = device_id.trim();
-        if !(8..=128).contains(&device_id.len())
-            || !device_id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-        {
-            anyhow::bail!("device_id must be 8-128 ASCII letters, numbers, hyphens, or underscores");
-        }
-        if !matches!(device_type, "monolith" | "pipboy") {
-            anyhow::bail!("device_type must be 'monolith' or 'pipboy'");
-        }
+        validate_owner_device_identity(device_id, device_type)?;
         let stored = self.db.find_user_by_email(&account.email)?
             .ok_or_else(|| anyhow::anyhow!("owner account was not found"))?;
         if !janus_core::verify_password(password, &stored.password_hash)? {
@@ -532,14 +573,14 @@ impl StateManager {
             )?;
             anyhow::bail!("owner password verification failed");
         }
-        let policies = serde_json::json!({
+        let policies = merge_owner_policy(None, &serde_json::json!({
             "require_approval_for_sensitive": true,
             "remote_access_enabled": false,
             "cloud_provider_enabled": false,
             "microphone_enabled": false,
             "hardware_modules_enabled": false,
             "strict_mode": true
-        });
+        }))?;
         self.db.register_owner_device(
             device_id, &account.organization_id, &account.id, device_type, &policies,
         )?;
@@ -594,37 +635,10 @@ impl StateManager {
         if organization_id != account.organization_id {
             anyhow::bail!("device ownership organization mismatch");
         }
-        let allowed = [
-            "require_approval_for_sensitive",
-            "remote_access_enabled",
-            "cloud_provider_enabled",
-            "microphone_enabled",
-            "hardware_modules_enabled",
-            "strict_mode",
-        ];
-        let object = requested.as_object()
-            .ok_or_else(|| anyhow::anyhow!("policies must be a JSON object"))?;
-        if object.is_empty() || object.keys().any(|key| !allowed.contains(&key.as_str()))
-            || object.values().any(|value| !value.is_boolean())
-        {
-            anyhow::bail!("policy updates must contain only allowlisted boolean settings");
-        }
-        let mut policies = serde_json::json!({
-            "require_approval_for_sensitive": true,
-            "remote_access_enabled": false,
-            "cloud_provider_enabled": false,
-            "microphone_enabled": false,
-            "hardware_modules_enabled": false,
-            "strict_mode": true
-        });
-        if let Some(current) = self.db.get_owned_device(device_id, &account.id)?.map(|row| row.2) {
-            policies = current;
-        }
-        let current = policies.as_object_mut()
-            .ok_or_else(|| anyhow::anyhow!("stored device policy is invalid"))?;
-        for (key, value) in object {
-            current.insert(key.clone(), value.clone());
-        }
+        let policies = merge_owner_policy(
+            self.db.get_owned_device(device_id, &account.id)?.map(|row| row.2),
+            &requested,
+        )?;
         if !self.db.update_owned_device_policy(device_id, &account.id, &policies)? {
             anyhow::bail!("device policy update did not affect an owned device");
         }
@@ -673,3 +687,45 @@ impl StateManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod owner_policy_tests {
+    use super::*;
+
+    #[test]
+    fn owner_device_identity_requires_valid_id_and_known_device_type() {
+        assert!(validate_owner_device_identity("MONO-123456", "monolith").is_ok());
+        assert!(validate_owner_device_identity("PIPBOY_123", "pipboy").is_ok());
+        assert!(validate_owner_device_identity("short", "monolith").is_err());
+        assert!(validate_owner_device_identity("../outside-123", "pipboy").is_err());
+        assert!(validate_owner_device_identity("VALID-123456", "unknown").is_err());
+    }
+
+    #[test]
+    fn owner_policy_rejects_unknown_keys_and_non_boolean_values() {
+        assert!(merge_owner_policy(None, &serde_json::json!({"shell_access": true})).is_err());
+        assert!(merge_owner_policy(None, &serde_json::json!({"remote_access_enabled": "yes"})).is_err());
+        assert!(merge_owner_policy(None, &serde_json::json!({})).is_err());
+        assert!(merge_owner_policy(None, &serde_json::json!([])).is_err());
+    }
+
+    #[test]
+    fn owner_policy_preserves_existing_values_when_one_setting_changes() {
+        let existing = serde_json::json!({
+            "require_approval_for_sensitive": true,
+            "remote_access_enabled": false,
+            "cloud_provider_enabled": true,
+            "microphone_enabled": false,
+            "hardware_modules_enabled": false,
+            "strict_mode": true
+        });
+        let updated = merge_owner_policy(
+            Some(existing),
+            &serde_json::json!({"remote_access_enabled": true}),
+        ).unwrap();
+        assert_eq!(updated["remote_access_enabled"], true);
+        assert_eq!(updated["cloud_provider_enabled"], true);
+        assert_eq!(updated["strict_mode"], true);
+    }
+}
+
