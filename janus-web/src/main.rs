@@ -1064,7 +1064,7 @@ mod aria_tests {
 
     #[test]
     fn aria_chat_handles_unicode_without_panicking() {
-        let message = "🙂".repeat(40);
+        let message = "🙂".repeat(80);
         let response = aria_respond(&message);
         assert!(response.contains("no live system tools"));
         assert!(response.contains(&"🙂".repeat(60)));
