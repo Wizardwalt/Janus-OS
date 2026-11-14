@@ -784,9 +784,10 @@ fn aria_respond(msg: &str) -> String {
     } else if t.len() < 5 {
         "I'm listening. You can say more.".into()
     } else {
+        let excerpt: String = msg.chars().take(60).collect();
         format!(
             "I can help reason through that request, but this chat panel has no live system tools: \"{}\".",
-            &msg[..msg.len().min(60)]
+            excerpt
         )
     }
 }
@@ -1054,4 +1055,24 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+
+#[cfg(test)]
+mod aria_tests {
+    use super::*;
+
+    #[test]
+    fn aria_chat_handles_unicode_without_panicking() {
+        let message = "🙂".repeat(40);
+        let response = aria_respond(&message);
+        assert!(response.contains("no live system tools"));
+        assert!(response.contains(&"🙂".repeat(60)));
+    }
+
+    #[test]
+    fn aria_status_does_not_claim_live_monitoring() {
+        let response = aria_respond("status");
+        assert!(response.contains("no live telemetry"));
+    }
 }
