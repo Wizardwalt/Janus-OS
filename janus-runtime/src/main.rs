@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
     info!("Plugin executor initialized");
 
     // Initialize hardware manager
-    let hw_manager = hardware::HardwareManager::new(config.serial_port.clone());
+    let hw_manager = hardware::HardwareManager::new(config.serial_port.clone(), config.hardware_enabled);
     hw_manager.initialize().await?;
     info!("Hardware manager initialized");
 
