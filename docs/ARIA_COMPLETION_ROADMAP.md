@@ -69,6 +69,7 @@ This document records the current repository evidence and implementation order. 
 - Added SQLite persistence for Monolith/Pip-Boy ownership records and per-device configurable policy JSON.
 - Added authenticated runtime endpoints to register a device with password re-entry, list only the caller's registered devices, and update allowlisted boolean settings after password re-entry.
 - Added a browser Owner Security Console and client methods for those endpoints.
+- Extracted owner-device identity and policy-merge validation into tested helpers, including rejection of malformed IDs, unknown device types, unknown policy keys, and non-boolean values; verified partial updates preserve unchanged settings.
 - Owner registration is currently bound to the initializing OrganizationAdmin account. This is an account enrollment slice, not proof of physical device possession.
 - The stored policy settings are not yet wired into the capability broker or device services; do not treat them as active enforcement.
 - Remaining: cryptographic device enrollment/attestation, purchaser-facing Owner Console, enforcement at each affected operation, break-glass recovery and ownership transfer, and automated negative/positive tests.
