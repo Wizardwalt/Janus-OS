@@ -8,6 +8,7 @@ use janus_core::{
     UserRole,
 };
 use rusqlite::{params, Connection, OptionalExtension};
+use sha2::Digest;
 use std::{path::Path, sync::Mutex};
 use tracing::debug;
 
@@ -218,6 +219,21 @@ impl Database {
                 FOREIGN KEY (source_device_id) REFERENCES owner_devices(device_id),
                 FOREIGN KEY (owner_user_id) REFERENCES user_accounts(id)
             );
+
+            -- Owner-scoped append-only learning journal. Payloads are client-encrypted.
+            CREATE TABLE IF NOT EXISTS aria_memory_events (
+                event_id TEXT PRIMARY KEY,
+                owner_user_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL CHECK (sequence > 0),
+                event_type TEXT NOT NULL,
+                payload_ciphertext TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(owner_user_id, sequence),
+                FOREIGN KEY (owner_user_id) REFERENCES user_accounts(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_aria_memory_owner_sequence
+                ON aria_memory_events(owner_user_id, sequence);
 
             CREATE TABLE IF NOT EXISTS operation_approvals (
                 id TEXT PRIMARY KEY,
@@ -803,6 +819,84 @@ impl Database {
         Ok(current)
     }
 
+    /// Append an immutable, owner-scoped encrypted memory/learning event.
+    /// Exact retries are idempotent; event IDs and sequence numbers cannot be reused
+    /// with different content. The caller encrypts the payload before persistence.
+    pub fn append_aria_memory_event(
+        &self,
+        event_id: &str,
+        owner_user_id: &str,
+        sequence: i64,
+        event_type: &str,
+        payload_ciphertext: &str,
+        payload_sha256: &str,
+    ) -> Result<bool> {
+        if event_id.is_empty() || event_id.len() > 128
+            || event_type.is_empty() || event_type.len() > 64
+            || payload_ciphertext.is_empty() || payload_ciphertext.len() > 1_400_000
+        {
+            anyhow::bail!("memory event fields are empty or exceed supported limits");
+        }
+        let digest = format!("{:x}", sha2::Sha256::digest(payload_ciphertext.as_bytes()));
+        if digest != payload_sha256 {
+            anyhow::bail!("memory event payload hash does not match ciphertext");
+        }
+        let mut conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let tx = conn.transaction()?;
+        let existing = tx.query_row(
+            "SELECT owner_user_id, sequence, event_type, payload_sha256 FROM aria_memory_events WHERE event_id = ?1",
+            params![event_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
+        ).optional()?;
+        if let Some((owner, seq, kind, hash)) = existing {
+            if owner == owner_user_id && seq == sequence && kind == event_type && hash == payload_sha256 {
+                return Ok(false);
+            }
+            anyhow::bail!("memory event ID was already used for different content");
+        }
+        let last_sequence: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM aria_memory_events WHERE owner_user_id = ?1",
+            params![owner_user_id],
+            |row| row.get(0),
+        )?;
+        if sequence != last_sequence + 1 {
+            anyhow::bail!("memory event sequence must be the next contiguous value");
+        }
+        tx.execute(
+            "INSERT INTO aria_memory_events (event_id, owner_user_id, sequence, event_type, payload_ciphertext, payload_sha256, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![event_id, owner_user_id, sequence, event_type, payload_ciphertext, payload_sha256, Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Return encrypted memory events after a caller's durable checkpoint.
+    pub fn aria_memory_events_after(
+        &self,
+        owner_user_id: &str,
+        after_sequence: i64,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>> {
+        if after_sequence < 0 || !(1..=500).contains(&limit) {
+            anyhow::bail!("invalid memory journal cursor or page size");
+        }
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let mut stmt = conn.prepare(
+            "SELECT event_id, sequence, event_type, payload_ciphertext, payload_sha256, created_at FROM aria_memory_events WHERE owner_user_id = ?1 AND sequence > ?2 ORDER BY sequence LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![owner_user_id, after_sequence, limit], |row| {
+            Ok(serde_json::json!({
+                "event_id": row.get::<_, String>(0)?,
+                "sequence": row.get::<_, i64>(1)?,
+                "event_type": row.get::<_, String>(2)?,
+                "payload_ciphertext": row.get::<_, String>(3)?,
+                "payload_sha256": row.get::<_, String>(4)?,
+                "created_at": row.get::<_, String>(5)?
+            }))
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// Create or update a reviewer-approved module certification record.
     pub fn upsert_module_certification(&self, certification: &ModuleCertification) -> Result<()> {
         self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?.execute(
@@ -1173,6 +1267,52 @@ fn copy_legacy_addon_setting(conn: &Connection, organization_id: &str) -> Result
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod aria_memory_journal_tests {
+    use super::*;
+
+    #[test]
+    fn memory_journal_is_append_only_idempotent_and_owner_scoped() {
+        let path = std::env::temp_dir().join(format!("janus-memory-test-{}.db", uuid::Uuid::new_v4()));
+        let db = Database::open(&path).unwrap();
+        let now = Utc::now();
+        let org = Organization { id: "org_memory_test".into(), name: "Memory Test".into(), active: true, created_at: now };
+        db.create_organization(&org).unwrap();
+        let owner = UserAccount {
+            id: "usr_memory_owner".into(), organization_id: org.id.clone(),
+            email: "memory@example.test".into(), role: UserRole::OrganizationAdmin,
+            active: true, failed_login_count: 0, locked_until: None, created_at: now,
+        };
+        let other = UserAccount {
+            id: "usr_memory_other".into(), organization_id: org.id.clone(),
+            email: "other-memory@example.test".into(), role: UserRole::Operator,
+            active: true, failed_login_count: 0, locked_until: None, created_at: now,
+        };
+        db.create_user(&owner, "test-hash").unwrap();
+        db.create_user(&other, "test-hash").unwrap();
+
+        let payload = "client-encrypted-memory";
+        let hash = format!("{:x}", sha2::Sha256::digest(payload.as_bytes()));
+        assert!(db.append_aria_memory_event("evt-1", &owner.id, 1, "memory.created", payload, &hash).unwrap());
+        assert!(!db.append_aria_memory_event("evt-1", &owner.id, 1, "memory.created", payload, &hash).unwrap());
+        assert!(db.append_aria_memory_event("evt-2", &owner.id, 2, "learning.feedback", "ciphertext-2",
+            &format!("{:x}", sha2::Sha256::digest(b"ciphertext-2"))).unwrap());
+        assert!(db.append_aria_memory_event("evt-3", &other.id, 1, "memory.created", "other-ciphertext",
+            &format!("{:x}", sha2::Sha256::digest(b"other-ciphertext"))).unwrap());
+
+        assert!(db.append_aria_memory_event("evt-4", &owner.id, 4, "memory.created", "gap",
+            &format!("{:x}", sha2::Sha256::digest(b"gap"))).is_err());
+        assert!(db.append_aria_memory_event("evt-5", &owner.id, 3, "memory.created", "bad-hash", "00").is_err());
+        let page = db.aria_memory_events_after(&owner.id, 0, 500).unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0]["sequence"], 1);
+        assert_eq!(db.aria_memory_events_after(&other.id, 0, 500).unwrap().len(), 1);
+        assert!(db.aria_memory_events_after(&owner.id, -1, 500).is_err());
+        drop(db);
+        std::fs::remove_file(path).unwrap();
+    }
 }
 
 #[cfg(test)]
