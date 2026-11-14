@@ -3,12 +3,11 @@
 use crate::database::Database;
 use anyhow::Result;
 use janus_core::{
-    hash_password, AuditEntry, AuditLog, Config, Organization, StateKey, SystemState, UserAccount,
+    hash_password, AuditEntry, AuditLog, Config, Organization, StateKey, UserAccount,
     UserRole,
 };
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::debug;
 
 /// Authenticated session returned only after password verification.
@@ -21,7 +20,6 @@ pub struct LoginSession {
 /// State manager with persistence layer.
 pub struct StateManager {
     config: Config,
-    state: Arc<RwLock<SystemState>>,
     db: Arc<Database>,
 }
 
@@ -32,10 +30,8 @@ impl StateManager {
             "Initializing state manager with DB: {}",
             config.db_path.display()
         );
-        let state = db.load_all_state()?;
         Ok(Self {
             config: config.clone(),
-            state: Arc::new(RwLock::new(state)),
             db,
         })
     }
@@ -506,29 +502,36 @@ impl StateManager {
         Ok(())
     }
 
-    /// Get current state
-    pub async fn get_state(&self) -> Result<SystemState> {
-        Ok(self.state.read().await.clone())
+    /// Read a state value only within the authenticated account's organization.
+    pub async fn get(
+        &self,
+        account: &UserAccount,
+        key: &StateKey,
+    ) -> Result<Option<serde_json::Value>> {
+        self.db.get_organization_state(&account.organization_id, key)
     }
 
-    /// Get single state value
-    pub async fn get(&self, key: &StateKey) -> Result<Option<serde_json::Value>> {
-        Ok(self.state.read().await.get(key).cloned())
-    }
-
-    /// Update state
-    pub async fn update_state(&self, key: &StateKey, value: serde_json::Value) -> Result<()> {
-        self.state.write().await.set(key, value.clone());
-        self.db.set_state(key, &value)?;
-        Ok(())
-    }
-
-    /// Remove state value
-    pub async fn remove(&self, key: &StateKey) -> Result<Option<serde_json::Value>> {
-        let removed = self.state.write().await.remove(key);
-        if removed.is_some() {
-            self.db.remove_state(key)?;
+    /// Update a state value within the authenticated organization.
+    pub async fn update_state(
+        &self,
+        account: &UserAccount,
+        key: &StateKey,
+        value: serde_json::Value,
+    ) -> Result<()> {
+        if !account.role.may_modify_state() {
+            anyhow::bail!("role is not allowed to modify state");
         }
-        Ok(removed)
+        self.db
+            .set_organization_state(&account.organization_id, key, &value)?;
+        self.db.record(
+            AuditEntry::new(&account.id, "ORGANIZATION_STATE_UPDATED", &key.fqn())
+                .success()
+                .with_metadata(serde_json::json!({
+                    "organization_id": account.organization_id,
+                    "namespace": key.namespace,
+                    "key": key.key
+                })),
+        )?;
+        Ok(())
     }
 }
