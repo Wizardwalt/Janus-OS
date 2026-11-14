@@ -7,7 +7,7 @@ A bootable Arch Linux forensics and intelligence platform. Rust web server, Andr
 ## Quick Start
 
 ```bash
-git clone https://github.com/Wizardwalt/Janus-OS.git
+git clone --recurse-submodules https://github.com/Wizardwalt/Janus-OS.git
 cd Janus-OS
 bash scripts/run-janus.sh
 # Open http://localhost:5000
