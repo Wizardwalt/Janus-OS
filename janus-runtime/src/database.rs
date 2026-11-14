@@ -4,8 +4,8 @@ use anyhow::Result;
 use chrono::Utc;
 use janus_core::{
     AuditEntry, AuditLevel, AuditLog, CertificationStatus, Engagement, EngagementScope,
-    LicensedFeature, ModuleCertification, Organization, SignedLicense, StateKey, SystemState,
-    UserAccount, UserRole,
+    LicensedFeature, ModuleCertification, Organization, SignedLicense, StateKey, UserAccount,
+    UserRole,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{path::Path, sync::Mutex};
@@ -32,6 +32,7 @@ impl Database {
             conn: Mutex::new(conn),
         };
         db.init_schema()?;
+        db.migrate_legacy_addon_setting()?;
         Ok(db)
     }
 
@@ -71,6 +72,17 @@ impl Database {
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS organization_state (
+                organization_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (organization_id, key),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_organization_state_key
+                ON organization_state(organization_id, key);
 
             CREATE TABLE IF NOT EXISTS user_accounts (
                 id TEXT PRIMARY KEY,
@@ -172,6 +184,25 @@ impl Database {
         Ok(())
     }
 
+    /// Copy the one legacy organization-wide add-on setting into each existing
+    /// organization. Other legacy global state is deliberately not exposed.
+    fn migrate_legacy_addon_setting(&self) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let organization_ids = {
+            let mut statement = conn.prepare("SELECT id FROM organizations")?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for organization_id in organization_ids {
+            copy_legacy_addon_setting(&conn, &organization_id)?;
+        }
+        Ok(())
+    }
+
     /// Create the first organization and administrator exactly once.
     ///
     /// The existence check and inserts share a transaction, so concurrent setup
@@ -205,24 +236,27 @@ impl Database {
             "INSERT INTO user_accounts (id, organization_id, email, password_hash, role, active, failed_login_count, locked_until, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![account.id, account.organization_id, account.email, password_hash, account.role.as_str(), account.active, account.failed_login_count, account.locked_until.map(|value| value.to_rfc3339()), account.created_at.to_rfc3339()],
         )?;
+        copy_legacy_addon_setting(&transaction, &organization.id)?;
         transaction.commit()?;
         Ok(())
     }
 
     /// Persist an organization.
     pub fn create_organization(&self, organization: &Organization) -> Result<()> {
-        self.conn
+        let conn = self
+            .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?
-            .execute(
-                "INSERT INTO organizations (id, name, active, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    organization.id,
-                    organization.name,
-                    organization.active,
-                    organization.created_at.to_rfc3339()
-                ],
-            )?;
+            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        conn.execute(
+            "INSERT INTO organizations (id, name, active, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                organization.id,
+                organization.name,
+                organization.active,
+                organization.created_at.to_rfc3339()
+            ],
+        )?;
+        copy_legacy_addon_setting(&conn, &organization.id)?;
         Ok(())
     }
 
@@ -680,71 +714,57 @@ impl Database {
         }))
     }
 
-    /// Store state value
-    pub fn set_state(&self, key: &StateKey, value: &serde_json::Value) -> Result<()> {
-        let json_str = serde_json::to_string(value)?;
+    /// Retrieve a state value scoped to one organization.
+    pub fn get_organization_state(
+        &self,
+        organization_id: &str,
+        key: &StateKey,
+    ) -> Result<Option<serde_json::Value>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let value = conn
+            .query_row(
+                "SELECT value FROM organization_state WHERE organization_id = ?1 AND key = ?2",
+                params![organization_id, key.fqn()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        value
+            .map(|value| serde_json::from_str(&value).map_err(anyhow::Error::from))
+            .transpose()
+    }
+
+    /// Persist a state value for exactly one organization.
+    pub fn set_organization_state(
+        &self,
+        organization_id: &str,
+        key: &StateKey,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        let json = serde_json::to_string(value)?;
         self.conn
             .lock()
             .map_err(|_| anyhow::anyhow!("database lock poisoned"))?
             .execute(
-                "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)",
-                params![key.fqn(), json_str],
+                "INSERT INTO organization_state (organization_id, key, value) VALUES (?1, ?2, ?3) ON CONFLICT(organization_id, key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                params![organization_id, key.fqn(), json],
             )?;
-        debug!("State persisted: {}", key);
+        debug!(organization_id, key = %key, "Organization state persisted");
         Ok(())
     }
 
-    /// Remove a persisted state value.
-    pub fn remove_state(&self, key: &StateKey) -> Result<()> {
+    /// Remove a state value belonging to exactly one organization.
+    pub fn remove_organization_state(&self, organization_id: &str, key: &StateKey) -> Result<()> {
         self.conn
             .lock()
             .map_err(|_| anyhow::anyhow!("database lock poisoned"))?
-            .execute("DELETE FROM state WHERE key = ?1", params![key.fqn()])?;
+            .execute(
+                "DELETE FROM organization_state WHERE organization_id = ?1 AND key = ?2",
+                params![organization_id, key.fqn()],
+            )?;
         Ok(())
-    }
-
-    /// Retrieve state value
-    pub fn get_state(&self, key: &StateKey) -> Result<Option<serde_json::Value>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
-        let result = conn
-            .query_row(
-                "SELECT value FROM state WHERE key = ?1",
-                params![key.fqn()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-
-        Ok(result.and_then(|s| serde_json::from_str(&s).ok()))
-    }
-
-    /// Load all state
-    pub fn load_all_state(&self) -> Result<SystemState> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
-        let mut stmt = conn.prepare("SELECT key, value FROM state")?;
-        let mut state = SystemState::new();
-
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        for row_result in rows {
-            let (key_str, value_str) = row_result?;
-            if let Ok(value) = serde_json::from_str(&value_str) {
-                let parts: Vec<&str> = key_str.split(':').collect();
-                if parts.len() == 2 {
-                    let key = StateKey::new(parts[0], parts[1]);
-                    state.set(&key, value);
-                }
-            }
-        }
-
-        Ok(state)
     }
 }
 
@@ -836,5 +856,76 @@ impl AuditLog for Database {
             .map_err(|e| janus_core::JanusError::Audit(e.to_string()))?;
 
         Ok(rows)
+    }
+}
+
+/// Preserve the legacy organization-wide add-on switch without copying any
+/// other global state into the tenant-scoped store.
+fn copy_legacy_addon_setting(conn: &Connection, organization_id: &str) -> Result<()> {
+    let key = "system:addons_enabled";
+    let value: Option<String> = conn
+        .query_row("SELECT value FROM state WHERE key = ?1", params![key], |row| row.get(0))
+        .optional()?;
+    if let Some(value) = value {
+        if matches!(serde_json::from_str::<serde_json::Value>(&value), Ok(serde_json::Value::Bool(_))) {
+            conn.execute(
+                "INSERT OR IGNORE INTO organization_state (organization_id, key, value) VALUES (?1, ?2, ?3)",
+                params![organization_id, key, value],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod organization_state_tests {
+    use super::*;
+
+    #[test]
+    fn organization_state_is_isolated_and_legacy_addon_setting_is_migrated() {
+        let path = std::env::temp_dir().join(format!("janus-state-test-{}.db", uuid::Uuid::new_v4()));
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy.execute_batch(
+                "CREATE TABLE state (id INTEGER PRIMARY KEY, key TEXT UNIQUE NOT NULL, value TEXT NOT NULL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE organizations (id TEXT PRIMARY KEY, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
+                 INSERT INTO organizations (id, name, active, created_at) VALUES ('org_legacy', 'Legacy', 1, '2026-01-01T00:00:00Z');
+                 INSERT INTO state (key, value) VALUES ('system:addons_enabled', 'false');"
+            ).unwrap();
+        }
+
+        let db = Database::open(&path).unwrap();
+        let key = StateKey::new("system", "addons_enabled");
+        assert_eq!(
+            db.get_organization_state("org_legacy", &key).unwrap(),
+            Some(serde_json::Value::Bool(false))
+        );
+
+        let second = Organization {
+            id: "org_second".into(),
+            name: "Second".into(),
+            active: true,
+            created_at: Utc::now(),
+        };
+        db.create_organization(&second).unwrap();
+        assert_eq!(
+            db.get_organization_state("org_second", &key).unwrap(),
+            Some(serde_json::Value::Bool(false))
+        );
+
+        db.set_organization_state("org_second", &key, &serde_json::Value::Bool(true)).unwrap();
+        assert_eq!(
+            db.get_organization_state("org_legacy", &key).unwrap(),
+            Some(serde_json::Value::Bool(false))
+        );
+        assert_eq!(
+            db.get_organization_state("org_second", &key).unwrap(),
+            Some(serde_json::Value::Bool(true))
+        );
+
+        db.remove_organization_state("org_second", &key).unwrap();
+        assert_eq!(db.get_organization_state("org_second", &key).unwrap(), None);
+        drop(db);
+        std::fs::remove_file(path).unwrap();
     }
 }
