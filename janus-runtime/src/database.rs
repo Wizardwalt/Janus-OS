@@ -1010,3 +1010,65 @@ mod organization_state_tests {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+#[cfg(test)]
+mod owner_device_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn owner_device_records_are_isolated_and_cannot_be_reassigned() {
+        let path = std::env::temp_dir().join(format!("janus-owner-device-test-{}.db", uuid::Uuid::new_v4()));
+        let db = Database::open(&path).unwrap();
+        let now = Utc::now();
+        let org = Organization {
+            id: "org_owner_test".into(),
+            name: "Owner Test".into(),
+            active: true,
+            created_at: now,
+        };
+        db.create_organization(&org).unwrap();
+
+        let owner = UserAccount {
+            id: "usr_owner_test".into(),
+            organization_id: org.id.clone(),
+            email: "owner@example.test".into(),
+            role: UserRole::OrganizationAdmin,
+            active: true,
+            failed_login_count: 0,
+            locked_until: None,
+            created_at: now,
+        };
+        let other = UserAccount {
+            id: "usr_other_test".into(),
+            organization_id: org.id.clone(),
+            email: "other@example.test".into(),
+            role: UserRole::Operator,
+            active: true,
+            failed_login_count: 0,
+            locked_until: None,
+            created_at: now,
+        };
+        db.create_user(&owner, "test-hash").unwrap();
+        db.create_user(&other, "test-hash").unwrap();
+
+        let policies = serde_json::json!({"strict_mode": true});
+        db.register_owner_device("MONO-TEST-1234", &org.id, &owner.id, "monolith", &policies).unwrap();
+
+        assert_eq!(
+            db.get_owned_device("MONO-TEST-1234", &owner.id).unwrap(),
+            Some((org.id.clone(), "monolith".into(), policies.clone()))
+        );
+        assert!(db.get_owned_device("MONO-TEST-1234", &other.id).unwrap().is_none());
+        assert_eq!(db.list_owned_devices(&owner.id).unwrap().len(), 1);
+        assert!(db.list_owned_devices(&other.id).unwrap().is_empty());
+        assert!(!db.update_owned_device_policy(
+            "MONO-TEST-1234", &other.id, &serde_json::json!({"strict_mode": false})
+        ).unwrap());
+        assert!(db.register_owner_device(
+            "MONO-TEST-1234", &org.id, &other.id, "pipboy", &policies
+        ).is_err());
+
+        drop(db);
+        std::fs::remove_file(path).unwrap();
+    }
+}
