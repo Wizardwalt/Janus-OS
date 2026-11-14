@@ -71,6 +71,7 @@ The runtime now has an initial persistence/API slice for purchaser-account-owned
 - `POST /owner/devices` registers a Monolith or Pip-Boy to the authenticated account after password re-entry.
 - `GET /owner/devices` lists only devices registered to that account.
 - `POST /owner/devices/{device_id}/policies` updates only that account's device, requires password re-entry, accepts only the documented boolean policy keys, and writes an audit event.
+- The browser now exposes an Owner Security Console for device registration, listing, and editing those stored policy records; passwords are submitted for re-verification and are not persisted by the console.
 - Initial policy values are conservative: remote access, cloud provider, microphone, and hardware modules are disabled; sensitive actions require approval; strict mode is enabled.
 
 **This is not yet a complete purchaser-ownership or enforcement system.** The current registration call proves control of an authenticated Janus account, not physical possession or cryptographic identity of a particular Monolith/Pip-Boy. Device-side enrollment challenge/attestation, an Owner Console, policy enforcement in the tool broker and service boundaries, secure recovery/transfer, and automated tests remain required. Until those pieces exist, the stored switches are policy records and must not be presented as if they already disable or enable the corresponding runtime capability.
