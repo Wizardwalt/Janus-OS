@@ -994,9 +994,10 @@ async fn get_state(
     headers: HeaderMap,
     Path((namespace, key)): Path<(String, String)>,
 ) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
-    if let Err(error) = authenticated_account(&state.state_manager, &headers).await {
-        return unauthorized_response(error);
-    }
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account,
+        Err(error) => return unauthorized_response(error),
+    };
     let state_key = StateKey::new(namespace, key);
     match state.state_manager.get(&account, &state_key).await {
         Ok(Some(value)) => (
