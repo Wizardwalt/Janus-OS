@@ -193,9 +193,8 @@ impl Database {
             .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
         let organization_ids = {
             let mut statement = conn.prepare("SELECT id FROM organizations")?;
-            statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         for organization_id in organization_ids {
             copy_legacy_addon_setting(&conn, &organization_id)?;
