@@ -16,6 +16,7 @@ use tracing::info;
 
 mod api;
 mod database;
+pub mod device_enrollment;
 mod executor;
 mod hardware;
 mod lua;
