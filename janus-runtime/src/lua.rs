@@ -65,6 +65,14 @@ impl PluginSandbox {
         const INSTRUCTION_HOOK_INTERVAL: u32 = 1_000;
         const MAX_INSTRUCTIONS: u32 = 100_000;
         let lua = Lua::new();
+
+        // Explicitly remove ambient loaders and process/debug libraries even if
+        // the selected Lua build exposes them as safe standard globals.
+        let globals = lua.globals();
+        for name in ["os", "io", "package", "debug", "require", "dofile", "loadfile", "load"] {
+            globals.set(name, LuaValue::Nil)?;
+        }
+
         let remaining_instructions = AtomicU32::new(MAX_INSTRUCTIONS);
         lua.set_hook(
             HookTriggers::new().every_nth_instruction(INSTRUCTION_HOOK_INTERVAL),
@@ -272,6 +280,30 @@ mod tests {
             .execute("return { [1] = 'first', name = 'mixed' }", serde_json::json!({}))
             .unwrap_err();
         assert!(mixed.to_string().contains("mix array and object"));
+    }
+
+    #[test]
+    fn plugin_sandbox_hides_process_filesystem_and_dynamic_loader_globals() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let result = sandbox
+            .execute(
+                "return { os = type(os), io = type(io), package = type(package), debug = type(debug), require = type(require), dofile = type(dofile), loadfile = type(loadfile), load = type(load) }",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "os": "nil",
+                "io": "nil",
+                "package": "nil",
+                "debug": "nil",
+                "require": "nil",
+                "dofile": "nil",
+                "loadfile": "nil",
+                "load": "nil"
+            })
+        );
     }
 
     #[test]
