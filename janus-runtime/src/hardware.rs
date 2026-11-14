@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Honest adapter status returned to authenticated clients.
 #[derive(Debug, Clone, Serialize)]
@@ -33,24 +33,23 @@ impl SerialInterface {
     pub fn new(port: impl Into<String>) -> Self {
         Self {
             port: port.into(),
-            available: true,
+            available: false,
         }
     }
 
     pub async fn open(&mut self) -> Result<()> {
-        debug!("Opening serial port: {}", self.port);
-        // Placeholder: would use serialport crate
-        Ok(())
+        anyhow::bail!(
+            "serial adapter is not implemented; refusing to report a simulated open for {}",
+            self.port
+        )
     }
 
-    pub async fn write(&self, data: &[u8]) -> Result<usize> {
-        debug!("Writing {} bytes to serial", data.len());
-        Ok(data.len())
+    pub async fn write(&self, _data: &[u8]) -> Result<usize> {
+        anyhow::bail!("serial adapter is not implemented; no bytes were written")
     }
 
-    pub async fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        debug!("Reading from serial");
-        Ok(0)
+    pub async fn read(&self, _buf: &mut [u8]) -> Result<usize> {
+        anyhow::bail!("serial adapter is not implemented; no device data was read")
     }
 }
 
@@ -75,13 +74,13 @@ impl GpioInterface {
     }
 
     pub async fn set_pin(&mut self, pin: u32, level: bool) -> Result<()> {
-        debug!("GPIO pin {} -> {}", pin, level);
-        Ok(())
+        let _ = (pin, level);
+        anyhow::bail!("GPIO adapter is not implemented; no pin state was changed")
     }
 
     pub async fn read_pin(&self, pin: u32) -> Result<bool> {
-        debug!("Reading GPIO pin {}", pin);
-        Ok(false)
+        let _ = pin;
+        anyhow::bail!("GPIO adapter is not implemented; no pin state was read")
     }
 }
 
@@ -104,8 +103,7 @@ impl CellularInterface {
     }
 
     pub async fn scan(&self) -> Result<Vec<CellularNetwork>> {
-        debug!("Scanning cellular networks");
-        Ok(vec![])
+        anyhow::bail!("cellular adapter is not implemented; no network scan was performed")
     }
 }
 
@@ -134,8 +132,8 @@ impl RfInterface {
     }
 
     pub async fn scan_frequencies(&self, start: u32, end: u32) -> Result<Vec<RfSignal>> {
-        debug!("Scanning RF: {} - {} Hz", start, end);
-        Ok(vec![])
+        let _ = (start, end);
+        anyhow::bail!("RF adapter is not implemented; no frequency scan was performed")
     }
 }
 
@@ -165,13 +163,11 @@ impl SensorInterface {
     }
 
     pub async fn read_accelerometer(&self) -> Result<(f64, f64, f64)> {
-        debug!("Reading accelerometer");
-        Ok((0.0, 0.0, 9.8))
+        anyhow::bail!("accelerometer adapter is not implemented; no sensor reading is available")
     }
 
     pub async fn read_gps(&self) -> Result<(f64, f64)> {
-        debug!("Reading GPS");
-        Ok((0.0, 0.0))
+        anyhow::bail!("GPS adapter is not implemented; no location reading is available")
     }
 }
 
@@ -215,17 +211,14 @@ impl HardwareManager {
     /// Report only verified adapter availability; unsupported adapters never claim readiness.
     pub async fn status(&self) -> Vec<HardwareAdapterStatus> {
         let serial = self.serial.read().await;
-        let serial_exists = std::path::Path::new(&serial.port).exists();
         vec![
             HardwareAdapterStatus {
                 adapter: "serial".into(),
-                state: if serial_exists {
-                    "available"
-                } else {
-                    "unavailable"
-                }
-                .into(),
-                detail: format!("configured path: {}", serial.port),
+                state: "unsupported".into(),
+                detail: format!(
+                    "configured path: {}; a production serial driver is not implemented",
+                    serial.port
+                ),
             },
             HardwareAdapterStatus {
                 adapter: "gpio".into(),
@@ -268,5 +261,38 @@ impl HardwareManager {
 
     pub fn sensors(&self) -> Arc<RwLock<SensorInterface>> {
         Arc::clone(&self.sensors)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unimplemented_hardware_operations_fail_instead_of_simulating_success() {
+        let mut serial = SerialInterface::new("/dev/ttyJANUS_TEST");
+        assert!(serial.open().await.is_err());
+        assert!(serial.write(b"test").await.is_err());
+        assert!(serial.read(&mut [0u8; 4]).await.is_err());
+
+        let mut gpio = GpioInterface::new();
+        assert!(gpio.set_pin(1, true).await.is_err());
+        assert!(gpio.read_pin(1).await.is_err());
+
+        assert!(CellularInterface::new().scan().await.is_err());
+        assert!(RfInterface::new().scan_frequencies(100, 200).await.is_err());
+
+        let sensors = SensorInterface::new();
+        assert!(sensors.read_accelerometer().await.is_err());
+        assert!(sensors.read_gps().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn hardware_status_never_reports_placeholder_adapters_as_ready() {
+        let manager = HardwareManager::new(Some("/dev/ttyJANUS_TEST".into()));
+        let status = manager.status().await;
+        assert_eq!(status.len(), 5);
+        assert!(status.iter().all(|adapter| adapter.state == "unsupported"));
     }
 }
