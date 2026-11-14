@@ -82,6 +82,31 @@ impl PluginSandbox {
         );
         let args_table = json_object_to_table(&lua, &args)?;
         lua.globals().set("args", args_table)?;
+
+        // Logging is the first intentionally exposed host capability. Keep the
+        // namespace narrow: plugins do not receive shell, filesystem, or device access.
+        let janus = lua.create_table()?;
+        janus.set(
+            "log",
+            lua.create_function(|_, message: String| {
+                const MAX_LOG_BYTES: usize = 2_048;
+                let mut safe_message: String = message
+                    .chars()
+                    .map(|character| if character.is_control() { ' ' } else { character })
+                    .collect();
+                if safe_message.len() > MAX_LOG_BYTES {
+                    let mut end = MAX_LOG_BYTES;
+                    while !safe_message.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    safe_message.truncate(end);
+                }
+                tracing::info!(target: "janus_plugin", plugin_log = %safe_message, "plugin log");
+                Ok(())
+            })?,
+        )?;
+        lua.globals().set("janus", janus)?;
+
         let value = lua.load(code).eval::<LuaValue>()?;
         lua_value_to_json(&value)
     }
@@ -203,6 +228,21 @@ mod tests {
             .execute("return { status = 'ok', count = args.count }", serde_json::json!({"count": 3}))
             .unwrap();
         assert_eq!(result, serde_json::json!({"status": "ok", "count": 3}));
+    }
+
+    #[test]
+    fn plugin_sandbox_exposes_safe_logging_without_shell_access() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let result = sandbox
+            .execute(
+                "janus.log('plugin started'); return { logger = type(janus.log), shell = type(janus.shell) }",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({"logger": "function", "shell": "nil"})
+        );
     }
 
     #[test]
