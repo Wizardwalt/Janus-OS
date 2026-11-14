@@ -64,6 +64,17 @@ Owner overrides are real policy changes—not a hidden vendor backdoor and not a
 
 **Ownership transfer / reset:** transfer requires explicit confirmation by the current Owner or the documented recovery procedure. It revokes old Owner and delegated credentials, disconnects paired devices, and securely resets private data/keys according to the selected retain-or-wipe flow. A factory reset must never silently preserve the prior Owner's authority.
 
+## Owner-control implementation status
+
+The runtime now has an initial persistence/API slice for purchaser-account-owned devices:
+
+- `POST /owner/devices` registers a Monolith or Pip-Boy to the authenticated account after password re-entry.
+- `GET /owner/devices` lists only devices registered to that account.
+- `POST /owner/devices/{device_id}/policies` updates only that account's device, requires password re-entry, accepts only the documented boolean policy keys, and writes an audit event.
+- Initial policy values are conservative: remote access, cloud provider, microphone, and hardware modules are disabled; sensitive actions require approval; strict mode is enabled.
+
+**This is not yet a complete purchaser-ownership or enforcement system.** The current registration call proves control of an authenticated Janus account, not physical possession or cryptographic identity of a particular Monolith/Pip-Boy. Device-side enrollment challenge/attestation, an Owner Console, policy enforcement in the tool broker and service boundaries, secure recovery/transfer, and automated tests remain required. Until those pieces exist, the stored switches are policy records and must not be presented as if they already disable or enable the corresponding runtime capability.
+
 ## Learning and prompt-injection resistance
 
 Learning means proposing traceable updates to memory and knowledge—not rewriting executable code, system prompts, access-control policy, or its own trust boundary.
