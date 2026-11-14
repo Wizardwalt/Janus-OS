@@ -4,18 +4,45 @@
 
 ARIA must not be permanently tied to one Pip-Boy, one Monolith, one disk, or one operating-system installation. Her recoverable identity and learned state must be portable to another authorized Janus-OS host. A failed device must be replaceable without recreating ARIA or losing acknowledged memories.
 
-This document is an architecture requirement, not a claim that migration or replication is implemented in the current build.
+This document is an architecture requirement, not a claim that full identity export, migration, replication, or failover is implemented in the current build.
 
-## Operating model: local-first, replicated intelligence
+## Current recovery foundation
 
-- **Pip-Boy runtime:** keeps a local, usable ARIA instance, recent conversation context, device observations, and a durable local change journal. It must continue in a clearly indicated offline/degraded mode when the Monolith is unreachable.
-- **Monolith:** provides the primary shared model-serving and coordination service when available, plus a durable replica of ARIA's portable state.
-- **Recovery host:** a third Janus-OS computer or encrypted removable backup can restore ARIA if either primary system is lost. The recovery host must be independently bootable and must not require the failed host to authorize recovery.
-- **Portable identity:** ARIA's stable identity is a signed, versioned data bundle, not a hardware serial number, hostname, disk, or model installation. Hardware-specific bindings are stored separately and re-detected on the replacement host.
+- The runtime can create encrypted, consistent SQLite snapshots using SQLite's online backup API, including committed WAL state.
+- Snapshots use XChaCha20-Poly1305 authenticated encryption and an owner-held 32-byte key supplied outside Janus.
+- The runtime provides an offline `restore-backup` command. It authenticates the encrypted file, checks SQLite integrity, and creates a new database path without overwriting an existing destination.
+- Temporary plaintext snapshot and restore files are created with owner-only permissions on Unix. On other platforms, their permissions inherit the containing directory's security ACL.
+- A successful database restore is not yet a complete ARIA migration. Portable identity filtering, signed manifests, schema upgrade orchestration, artifact transfer, and device re-enrollment remain future work.
 
-## What must be portable
+## Recovery key handling
 
-The portable state bundle should include:
+Generate a fresh key using a cryptographically secure random generator, for example:
+
+```sh
+openssl rand -base64 32
+```
+
+Store the resulting value in a trusted secret manager or offline recovery record, separate from the Janus host and backup destination. Do not commit it, place it in a shell history, or store it beside the backup. Loss of the key makes the encrypted backup unrecoverable.
+
+## Restore procedure
+
+1. Install the same or a compatible Janus release on a trusted recovery host.
+2. Place the encrypted `.janusbk` file on that host using a trusted transfer method.
+3. Supply the recovery key through the process environment as `JANUS_BACKUP_KEY`.
+4. Restore to a new path (the command refuses to overwrite existing files):
+
+   ```sh
+   JANUS_BACKUP_KEY='<base64-recovery-key>' janus-runtime restore-backup --backup ./backups/example.janusbk --destination ./recovery/janus-restored.db
+   ```
+
+5. Verify the restored database and retain the original encrypted backup unchanged.
+6. Point the runtime at the restored database only after reviewing the recovery result.
+
+The environment-variable example is convenient for automation but may expose the secret to process inspection on some systems. Prefer an OS secret manager or protected service environment for production operation. The command does not start the API server, load plugins, or initialize hardware.
+
+## Portable-state boundary
+
+A future signed, versioned ARIA bundle should include:
 
 1. ARIA identity and user-approved personality/profile settings.
 2. Long-term memory, conversation summaries, user corrections, and learning records.
@@ -25,7 +52,7 @@ The portable state bundle should include:
 6. Sync journal, replication checkpoints, schema version, and recovery metadata.
 7. Optional model adapters and model configuration. Large model weights may be stored as separately verified content-addressed objects.
 
-Hardware drivers, live device handles, network credentials, session tokens, and machine-specific paths must not be copied as if they were portable identity. On a new host, hardware is rediscovered and credentials are re-enrolled.
+Hardware drivers, live device handles, network credentials, session tokens, private device keys, and machine-specific paths must not be copied as portable identity. On a new host, hardware is rediscovered and credentials are re-enrolled.
 
 ## Durability and replication rules
 
@@ -76,4 +103,4 @@ Hardware drivers, live device handles, network credentials, session tokens, and 
 
 ## Acceptance criteria
 
-ARIA is considered portable only when a clean, separately provisioned Janus-OS host can restore her identity and all acknowledged learning state from a verified recovery bundle, continue operating without the original Pip-Boy or Monolith, and later reconcile safely with surviving replicas. A green build or a generated backup file alone does not satisfy this requirement.
+ARIA is considered portable only when a clean, separately provisioned Janus-OS host can restore her identity and all acknowledged learning state from a verified independent recovery bundle, continue operating without the original Pip-Boy or Monolith, and later reconcile safely with surviving replicas. A green build or a generated backup file alone does not satisfy this requirement.
