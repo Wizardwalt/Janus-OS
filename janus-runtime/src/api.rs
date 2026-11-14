@@ -838,7 +838,7 @@ async fn execute(
     // The organization-wide add-on switch is persisted in runtime state. Missing
     // state preserves existing installations; an explicit false disables execution.
     let addons_key = StateKey::new("system", "addons_enabled");
-    match state.state_manager.get(&addons_key).await {
+    match state.state_manager.get(&account, &addons_key).await {
         Ok(Some(value)) if value == serde_json::Value::Bool(false) => {
             return (
                 StatusCode::FORBIDDEN,
@@ -998,7 +998,7 @@ async fn get_state(
         return unauthorized_response(error);
     }
     let state_key = StateKey::new(namespace, key);
-    match state.state_manager.get(&state_key).await {
+    match state.state_manager.get(&account, &state_key).await {
         Ok(Some(value)) => (
             StatusCode::OK,
             Json(ApiResponse {
@@ -1047,7 +1047,7 @@ async fn set_state(
         );
     }
     let state_key = StateKey::new(namespace, key);
-    match state.state_manager.update_state(&state_key, req).await {
+    match state.state_manager.update_state(&account, &state_key, req).await {
         Ok(_) => (
             StatusCode::OK,
             Json(ApiResponse {
