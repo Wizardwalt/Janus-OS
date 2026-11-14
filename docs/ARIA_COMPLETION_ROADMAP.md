@@ -64,6 +64,14 @@ This document records the current repository evidence and implementation order. 
 
 **Exit criteria:** accepted learning updates persist and are retrievable; rejected or corrected items remain traceable; executable code and permissions are unchanged.
 
+### Owner-control implementation progress
+
+- Added SQLite persistence for Monolith/Pip-Boy ownership records and per-device configurable policy JSON.
+- Added authenticated runtime endpoints to register a device with password re-entry, list only the caller's registered devices, and update allowlisted boolean settings after password re-entry.
+- Owner registration is currently bound to the initializing OrganizationAdmin account. This is an account enrollment slice, not proof of physical device possession.
+- The stored policy settings are not yet wired into the capability broker or device services; do not treat them as active enforcement.
+- Remaining: cryptographic device enrollment/attestation, purchaser-facing Owner Console, enforcement at each affected operation, break-glass recovery and ownership transfer, and automated negative/positive tests.
+
 ### Phase 4 — Skills and controlled tools
 - Add a registry of typed ARIA tools with declared inputs, outputs, required permissions, and audit events.
 - Route hardware and Janus module requests through existing authenticated, capability-gated runtime services.
