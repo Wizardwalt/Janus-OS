@@ -698,6 +698,85 @@ impl StateManager {
         Ok(serde_json::json!({"device_id": device_id, "key_fingerprint": fingerprint, "enrolled": true}))
     }
 
+    /// Add an opaque encrypted sync event on behalf of an enrolled owner's device.
+    /// This endpoint is owner-session authenticated; device-signature authentication
+    /// for unattended device-to-device transport is a separate follow-up.
+    pub async fn append_device_sync_event(
+        &self,
+        account: &janus_core::UserAccount,
+        source_device_id: &str,
+        event_id: &str,
+        sequence: i64,
+        event_type: &str,
+        payload_ciphertext: &str,
+    ) -> Result<serde_json::Value> {
+        if !account.role.may_administer_organization() {
+            anyhow::bail!("only the device owner can write sync events");
+        }
+        if event_id.is_empty() || event_id.len() > 128 || !event_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            anyhow::bail!("event_id must be 1-128 ASCII letters, numbers, hyphens, or underscores");
+        }
+        if sequence <= 0 || event_type.is_empty() || event_type.len() > 64 || payload_ciphertext.is_empty() || payload_ciphertext.len() > 1_048_576 {
+            anyhow::bail!("invalid sync event sequence, type, or payload size");
+        }
+        let (organization_id, _, _) = self.db.get_owned_device(source_device_id, &account.id)?
+            .ok_or_else(|| anyhow::anyhow!("source device is not registered to this owner"))?;
+        if organization_id != account.organization_id {
+            anyhow::bail!("sync source device organization mismatch");
+        }
+        let payload_sha256 = format!("{:x}", Sha256::digest(payload_ciphertext.as_bytes()));
+        let inserted = self.db.append_device_sync_event(
+            event_id, &account.id, source_device_id, sequence, event_type, payload_ciphertext, &payload_sha256,
+        )?;
+        Ok(serde_json::json!({"event_id": event_id, "sequence": sequence, "payload_sha256": payload_sha256, "inserted": inserted}))
+    }
+
+    /// Fetch pending journal entries from one of this owner's devices for another.
+    pub async fn pending_device_sync_events(
+        &self,
+        account: &janus_core::UserAccount,
+        target_device_id: &str,
+        source_device_id: &str,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>> {
+        if !account.role.may_administer_organization() {
+            anyhow::bail!("only the device owner can read sync events");
+        }
+        for device_id in [target_device_id, source_device_id] {
+            let (organization_id, _, _) = self.db.get_owned_device(device_id, &account.id)?
+                .ok_or_else(|| anyhow::anyhow!("sync device is not registered to this owner"))?;
+            if organization_id != account.organization_id {
+                anyhow::bail!("sync device organization mismatch");
+            }
+        }
+        if !(1..=500).contains(&limit) {
+            anyhow::bail!("sync event batch limit must be between 1 and 500");
+        }
+        self.db.pending_device_sync_events(&account.id, target_device_id, source_device_id, limit)
+    }
+
+    /// Acknowledge events only after the target device has durably applied them.
+    pub async fn acknowledge_device_sync_events(
+        &self,
+        account: &janus_core::UserAccount,
+        target_device_id: &str,
+        source_device_id: &str,
+        last_sequence: i64,
+    ) -> Result<serde_json::Value> {
+        if !account.role.may_administer_organization() {
+            anyhow::bail!("only the device owner can acknowledge sync events");
+        }
+        for device_id in [target_device_id, source_device_id] {
+            let (organization_id, _, _) = self.db.get_owned_device(device_id, &account.id)?
+                .ok_or_else(|| anyhow::anyhow!("sync device is not registered to this owner"))?;
+            if organization_id != account.organization_id {
+                anyhow::bail!("sync device organization mismatch");
+            }
+        }
+        let cursor = self.db.acknowledge_device_sync_events(&account.id, target_device_id, source_device_id, last_sequence)?;
+        Ok(serde_json::json!({"target_device_id": target_device_id, "source_device_id": source_device_id, "last_sequence": cursor}))
+    }
+
     /// List only devices registered to the authenticated account.
     pub async fn owned_devices(
         &self,
