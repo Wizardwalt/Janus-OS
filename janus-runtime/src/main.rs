@@ -8,7 +8,7 @@
 //! - Hardware abstraction layer
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use janus_core::Config;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -60,17 +60,39 @@ struct Args {
     /// Log level
     #[arg(long, value_name = "LEVEL", default_value = "info")]
     log_level: String,
+
+    /// Run a one-shot administrative command instead of starting the runtime.
+    #[command(subcommand)]
+    command: Option<RuntimeCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+enum RuntimeCommand {
+    /// Decrypt, integrity-check, and restore a backup to a new database path.
+    /// Requires JANUS_BACKUP_KEY. The destination must not already exist.
+    RestoreBackup {
+        /// Existing .janusbk encrypted backup file.
+        #[arg(long, value_name = "FILE")]
+        backup: PathBuf,
+        /// New database path to create after verification.
+        #[arg(long, value_name = "FILE")]
+        destination: PathBuf,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .or_else(|_| tracing_subscriber::EnvFilter::try_new(&args.log_level))?;
-
     tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    if let Some(RuntimeCommand::RestoreBackup { backup, destination }) = args.command {
+        backup::restore_from_environment(&backup, &destination)?;
+        info!("Recovery completed. Review the restored database before starting Janus.");
+        return Ok(());
+    }
 
     info!("Janus Runtime v{} starting", janus_core::VERSION);
 
