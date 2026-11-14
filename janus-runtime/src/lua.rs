@@ -125,6 +125,18 @@ fn json_to_lua<'lua>(lua: &'lua Lua, value: &serde_json::Value) -> Result<LuaVal
 }
 
 fn lua_value_to_json(value: &LuaValue<'_>) -> Result<serde_json::Value> {
+    lua_value_to_json_at_depth(value, 0)
+}
+
+fn lua_value_to_json_at_depth(
+    value: &LuaValue<'_>,
+    depth: usize,
+) -> Result<serde_json::Value> {
+    const MAX_TABLE_DEPTH: usize = 64;
+    if depth > MAX_TABLE_DEPTH {
+        anyhow::bail!("plugin result exceeds maximum table nesting depth");
+    }
+
     Ok(match value {
         LuaValue::Nil => serde_json::Value::Null,
         LuaValue::Boolean(value) => serde_json::Value::Bool(*value),
@@ -132,12 +144,49 @@ fn lua_value_to_json(value: &LuaValue<'_>) -> Result<serde_json::Value> {
         LuaValue::Number(value) => serde_json::json!(*value),
         LuaValue::String(value) => serde_json::Value::String(value.to_str()?.to_owned()),
         LuaValue::Table(table) => {
-            let mut result = serde_json::Map::new();
-            for pair in table.clone().pairs::<String, LuaValue>() {
-                let (key, value) = pair?;
-                result.insert(key, lua_value_to_json(&value)?);
+            // Lua tables can represent either JSON arrays or objects. Preserve
+            // numeric sequence keys instead of trying to coerce every key to text.
+            let mut array_entries = Vec::new();
+            let mut object = serde_json::Map::new();
+            let mut has_array_keys = false;
+            let mut has_object_keys = false;
+
+            for pair in table.clone().pairs::<LuaValue, LuaValue>() {
+                let (key, item) = pair?;
+                match key {
+                    LuaValue::Integer(index) if index > 0 => {
+                        has_array_keys = true;
+                        array_entries.push((index, item));
+                    }
+                    LuaValue::String(key) => {
+                        has_object_keys = true;
+                        object.insert(
+                            key.to_str()?.to_owned(),
+                            lua_value_to_json_at_depth(&item, depth + 1)?,
+                        );
+                    }
+                    _ => anyhow::bail!(
+                        "plugin result table keys must be positive integers or strings"
+                    ),
+                }
             }
-            serde_json::Value::Object(result)
+
+            if has_array_keys && has_object_keys {
+                anyhow::bail!("plugin result table cannot mix array and object keys");
+            }
+            if has_array_keys {
+                array_entries.sort_by_key(|(index, _)| *index);
+                let mut result = Vec::with_capacity(array_entries.len());
+                for (offset, (index, item)) in array_entries.into_iter().enumerate() {
+                    if index != (offset + 1) as i64 {
+                        anyhow::bail!("plugin result array keys must be contiguous from 1");
+                    }
+                    result.push(lua_value_to_json_at_depth(&item, depth + 1)?);
+                }
+                serde_json::Value::Array(result)
+            } else {
+                serde_json::Value::Object(object)
+            }
         }
         _ => serde_json::Value::Null,
     })
@@ -154,6 +203,35 @@ mod tests {
             .execute("return { status = 'ok', count = args.count }", serde_json::json!({"count": 3}))
             .unwrap();
         assert_eq!(result, serde_json::json!({"status": "ok", "count": 3}));
+    }
+
+    #[test]
+    fn plugin_sandbox_preserves_lua_arrays_and_nested_objects() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let result = sandbox
+            .execute(
+                "return { items = { 'pip-boy', 'sensor' }, enabled = true }",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({"items": ["pip-boy", "sensor"], "enabled": true})
+        );
+    }
+
+    #[test]
+    fn plugin_sandbox_rejects_sparse_or_mixed_result_tables() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let sparse = sandbox
+            .execute("return { [1] = 'first', [3] = 'third' }", serde_json::json!({}))
+            .unwrap_err();
+        assert!(sparse.to_string().contains("contiguous"));
+
+        let mixed = sandbox
+            .execute("return { [1] = 'first', name = 'mixed' }", serde_json::json!({}))
+            .unwrap_err();
+        assert!(mixed.to_string().contains("mix array and object"));
     }
 
     #[test]
