@@ -4,8 +4,8 @@ use anyhow::Result;
 use chrono::Utc;
 use janus_core::{
     AuditEntry, AuditLevel, AuditLog, CertificationStatus, Engagement, EngagementScope,
-    LicensedFeature, ModuleCertification, Organization, SignedLicense, StateKey, SystemState,
-    UserAccount, UserRole,
+    LicensedFeature, ModuleCertification, Organization, SignedLicense, StateKey, UserAccount,
+    UserRole,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{path::Path, sync::Mutex};
@@ -32,6 +32,7 @@ impl Database {
             conn: Mutex::new(conn),
         };
         db.init_schema()?;
+        db.migrate_legacy_addon_setting()?;
         Ok(db)
     }
 
@@ -71,6 +72,17 @@ impl Database {
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS organization_state (
+                organization_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (organization_id, key),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_organization_state_key
+                ON organization_state(organization_id, key);
 
             CREATE TABLE IF NOT EXISTS user_accounts (
                 id TEXT PRIMARY KEY,
@@ -139,6 +151,20 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
+            CREATE TABLE IF NOT EXISTS owner_devices (
+                device_id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                owner_user_id TEXT NOT NULL,
+                device_type TEXT NOT NULL CHECK (device_type IN ('monolith', 'pipboy')),
+                policies TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (organization_id) REFERENCES organizations(id),
+                FOREIGN KEY (owner_user_id) REFERENCES user_accounts(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_owner_devices_owner
+                ON owner_devices(owner_user_id);
+
             CREATE TABLE IF NOT EXISTS operation_approvals (
                 id TEXT PRIMARY KEY,
                 engagement_id TEXT NOT NULL,
@@ -169,6 +195,24 @@ impl Database {
         "#,
             )?;
         debug!("Database schema initialized");
+        Ok(())
+    }
+
+    /// Copy the one legacy organization-wide add-on setting into each existing
+    /// organization. Other legacy global state is deliberately not exposed.
+    fn migrate_legacy_addon_setting(&self) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let organization_ids = {
+            let mut statement = conn.prepare("SELECT id FROM organizations")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for organization_id in organization_ids {
+            copy_legacy_addon_setting(&conn, &organization_id)?;
+        }
         Ok(())
     }
 
@@ -205,24 +249,27 @@ impl Database {
             "INSERT INTO user_accounts (id, organization_id, email, password_hash, role, active, failed_login_count, locked_until, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![account.id, account.organization_id, account.email, password_hash, account.role.as_str(), account.active, account.failed_login_count, account.locked_until.map(|value| value.to_rfc3339()), account.created_at.to_rfc3339()],
         )?;
+        copy_legacy_addon_setting(&transaction, &organization.id)?;
         transaction.commit()?;
         Ok(())
     }
 
     /// Persist an organization.
     pub fn create_organization(&self, organization: &Organization) -> Result<()> {
-        self.conn
+        let conn = self
+            .conn
             .lock()
-            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?
-            .execute(
-                "INSERT INTO organizations (id, name, active, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    organization.id,
-                    organization.name,
-                    organization.active,
-                    organization.created_at.to_rfc3339()
-                ],
-            )?;
+            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        conn.execute(
+            "INSERT INTO organizations (id, name, active, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                organization.id,
+                organization.name,
+                organization.active,
+                organization.created_at.to_rfc3339()
+            ],
+        )?;
+        copy_legacy_addon_setting(&conn, &organization.id)?;
         Ok(())
     }
 
@@ -471,6 +518,74 @@ impl Database {
         Ok(())
     }
 
+    /// Register a physical Janus device to the authenticated purchaser account.
+    /// The device ID is globally unique; an existing registration is never reassigned.
+    pub fn register_owner_device(
+        &self,
+        device_id: &str,
+        organization_id: &str,
+        owner_user_id: &str,
+        device_type: &str,
+        policies: &serde_json::Value,
+    ) -> Result<()> {
+        let policies_json = serde_json::to_string(policies)?;
+        let now = Utc::now().to_rfc3339();
+        self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?.execute(
+            "INSERT INTO owner_devices (device_id, organization_id, owner_user_id, device_type, policies, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![device_id, organization_id, owner_user_id, device_type, policies_json, now],
+        )?;
+        Ok(())
+    }
+
+    /// Read an owned device only for its registered owner.
+    pub fn get_owned_device(
+        &self,
+        device_id: &str,
+        owner_user_id: &str,
+    ) -> Result<Option<(String, String, serde_json::Value)>> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let row = conn.query_row(
+            "SELECT organization_id, device_type, policies FROM owner_devices WHERE device_id = ?1 AND owner_user_id = ?2",
+            params![device_id, owner_user_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+        ).optional()?;
+        row.map(|(organization_id, device_type, json)| {
+            Ok((organization_id, device_type, serde_json::from_str(&json)?))
+        }).transpose()
+    }
+
+    /// List devices owned by one account without exposing another account's devices.
+    pub fn list_owned_devices(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<Vec<(String, String, serde_json::Value)>> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let mut statement = conn.prepare(
+            "SELECT device_id, device_type, policies FROM owner_devices WHERE owner_user_id = ?1 ORDER BY created_at",
+        )?;
+        let rows = statement.query_map(params![owner_user_id], |row| {
+            let json: String = row.get(2)?;
+            let policies = serde_json::from_str(&json).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            Ok((row.get(0)?, row.get(1)?, policies))
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Replace a registered device's configurable policy only when called by its owner.
+    pub fn update_owned_device_policy(
+        &self,
+        device_id: &str,
+        owner_user_id: &str,
+        policies: &serde_json::Value,
+    ) -> Result<bool> {
+        let json = serde_json::to_string(policies)?;
+        let changed = self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?.execute(
+            "UPDATE owner_devices SET policies = ?1, updated_at = ?2 WHERE device_id = ?3 AND owner_user_id = ?4",
+            params![json, Utc::now().to_rfc3339(), device_id, owner_user_id],
+        )?;
+        Ok(changed == 1)
+    }
+
     /// Create or update a reviewer-approved module certification record.
     pub fn upsert_module_certification(&self, certification: &ModuleCertification) -> Result<()> {
         self.conn.lock().map_err(|_| anyhow::anyhow!("database lock poisoned"))?.execute(
@@ -680,71 +795,57 @@ impl Database {
         }))
     }
 
-    /// Store state value
-    pub fn set_state(&self, key: &StateKey, value: &serde_json::Value) -> Result<()> {
-        let json_str = serde_json::to_string(value)?;
+    /// Retrieve a state value scoped to one organization.
+    pub fn get_organization_state(
+        &self,
+        organization_id: &str,
+        key: &StateKey,
+    ) -> Result<Option<serde_json::Value>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
+        let value = conn
+            .query_row(
+                "SELECT value FROM organization_state WHERE organization_id = ?1 AND key = ?2",
+                params![organization_id, key.fqn()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        value
+            .map(|value| serde_json::from_str(&value).map_err(anyhow::Error::from))
+            .transpose()
+    }
+
+    /// Persist a state value for exactly one organization.
+    pub fn set_organization_state(
+        &self,
+        organization_id: &str,
+        key: &StateKey,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        let json = serde_json::to_string(value)?;
         self.conn
             .lock()
             .map_err(|_| anyhow::anyhow!("database lock poisoned"))?
             .execute(
-                "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)",
-                params![key.fqn(), json_str],
+                "INSERT INTO organization_state (organization_id, key, value) VALUES (?1, ?2, ?3) ON CONFLICT(organization_id, key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                params![organization_id, key.fqn(), json],
             )?;
-        debug!("State persisted: {}", key);
+        debug!(organization_id, key = %key, "Organization state persisted");
         Ok(())
     }
 
-    /// Remove a persisted state value.
-    pub fn remove_state(&self, key: &StateKey) -> Result<()> {
+    /// Remove a state value belonging to exactly one organization.
+    pub fn remove_organization_state(&self, organization_id: &str, key: &StateKey) -> Result<()> {
         self.conn
             .lock()
             .map_err(|_| anyhow::anyhow!("database lock poisoned"))?
-            .execute("DELETE FROM state WHERE key = ?1", params![key.fqn()])?;
+            .execute(
+                "DELETE FROM organization_state WHERE organization_id = ?1 AND key = ?2",
+                params![organization_id, key.fqn()],
+            )?;
         Ok(())
-    }
-
-    /// Retrieve state value
-    pub fn get_state(&self, key: &StateKey) -> Result<Option<serde_json::Value>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
-        let result = conn
-            .query_row(
-                "SELECT value FROM state WHERE key = ?1",
-                params![key.fqn()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-
-        Ok(result.and_then(|s| serde_json::from_str(&s).ok()))
-    }
-
-    /// Load all state
-    pub fn load_all_state(&self) -> Result<SystemState> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("database lock poisoned"))?;
-        let mut stmt = conn.prepare("SELECT key, value FROM state")?;
-        let mut state = SystemState::new();
-
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        for row_result in rows {
-            let (key_str, value_str) = row_result?;
-            if let Ok(value) = serde_json::from_str(&value_str) {
-                let parts: Vec<&str> = key_str.split(':').collect();
-                if parts.len() == 2 {
-                    let key = StateKey::new(parts[0], parts[1]);
-                    state.set(&key, value);
-                }
-            }
-        }
-
-        Ok(state)
     }
 }
 
@@ -836,5 +937,138 @@ impl AuditLog for Database {
             .map_err(|e| janus_core::JanusError::Audit(e.to_string()))?;
 
         Ok(rows)
+    }
+}
+
+/// Preserve the legacy organization-wide add-on switch without copying any
+/// other global state into the tenant-scoped store.
+fn copy_legacy_addon_setting(conn: &Connection, organization_id: &str) -> Result<()> {
+    let key = "system:addons_enabled";
+    let value: Option<String> = conn
+        .query_row("SELECT value FROM state WHERE key = ?1", params![key], |row| row.get(0))
+        .optional()?;
+    if let Some(value) = value {
+        if matches!(serde_json::from_str::<serde_json::Value>(&value), Ok(serde_json::Value::Bool(_))) {
+            conn.execute(
+                "INSERT OR IGNORE INTO organization_state (organization_id, key, value) VALUES (?1, ?2, ?3)",
+                params![organization_id, key, value],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod organization_state_tests {
+    use super::*;
+
+    #[test]
+    fn organization_state_is_isolated_and_legacy_addon_setting_is_migrated() {
+        let path = std::env::temp_dir().join(format!("janus-state-test-{}.db", uuid::Uuid::new_v4()));
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy.execute_batch(
+                "CREATE TABLE state (id INTEGER PRIMARY KEY, key TEXT UNIQUE NOT NULL, value TEXT NOT NULL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE organizations (id TEXT PRIMARY KEY, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
+                 INSERT INTO organizations (id, name, active, created_at) VALUES ('org_legacy', 'Legacy', 1, '2026-01-01T00:00:00Z');
+                 INSERT INTO state (key, value) VALUES ('system:addons_enabled', 'false');"
+            ).unwrap();
+        }
+
+        let db = Database::open(&path).unwrap();
+        let key = StateKey::new("system", "addons_enabled");
+        assert_eq!(
+            db.get_organization_state("org_legacy", &key).unwrap(),
+            Some(serde_json::Value::Bool(false))
+        );
+
+        let second = Organization {
+            id: "org_second".into(),
+            name: "Second".into(),
+            active: true,
+            created_at: Utc::now(),
+        };
+        db.create_organization(&second).unwrap();
+        assert_eq!(
+            db.get_organization_state("org_second", &key).unwrap(),
+            Some(serde_json::Value::Bool(false))
+        );
+
+        db.set_organization_state("org_second", &key, &serde_json::Value::Bool(true)).unwrap();
+        assert_eq!(
+            db.get_organization_state("org_legacy", &key).unwrap(),
+            Some(serde_json::Value::Bool(false))
+        );
+        assert_eq!(
+            db.get_organization_state("org_second", &key).unwrap(),
+            Some(serde_json::Value::Bool(true))
+        );
+
+        db.remove_organization_state("org_second", &key).unwrap();
+        assert_eq!(db.get_organization_state("org_second", &key).unwrap(), None);
+        drop(db);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod owner_device_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn owner_device_records_are_isolated_and_cannot_be_reassigned() {
+        let path = std::env::temp_dir().join(format!("janus-owner-device-test-{}.db", uuid::Uuid::new_v4()));
+        let db = Database::open(&path).unwrap();
+        let now = Utc::now();
+        let org = Organization {
+            id: "org_owner_test".into(),
+            name: "Owner Test".into(),
+            active: true,
+            created_at: now,
+        };
+        db.create_organization(&org).unwrap();
+
+        let owner = UserAccount {
+            id: "usr_owner_test".into(),
+            organization_id: org.id.clone(),
+            email: "owner@example.test".into(),
+            role: UserRole::OrganizationAdmin,
+            active: true,
+            failed_login_count: 0,
+            locked_until: None,
+            created_at: now,
+        };
+        let other = UserAccount {
+            id: "usr_other_test".into(),
+            organization_id: org.id.clone(),
+            email: "other@example.test".into(),
+            role: UserRole::Operator,
+            active: true,
+            failed_login_count: 0,
+            locked_until: None,
+            created_at: now,
+        };
+        db.create_user(&owner, "test-hash").unwrap();
+        db.create_user(&other, "test-hash").unwrap();
+
+        let policies = serde_json::json!({"strict_mode": true});
+        db.register_owner_device("MONO-TEST-1234", &org.id, &owner.id, "monolith", &policies).unwrap();
+
+        assert_eq!(
+            db.get_owned_device("MONO-TEST-1234", &owner.id).unwrap(),
+            Some((org.id.clone(), "monolith".into(), policies.clone()))
+        );
+        assert!(db.get_owned_device("MONO-TEST-1234", &other.id).unwrap().is_none());
+        assert_eq!(db.list_owned_devices(&owner.id).unwrap().len(), 1);
+        assert!(db.list_owned_devices(&other.id).unwrap().is_empty());
+        assert!(!db.update_owned_device_policy(
+            "MONO-TEST-1234", &other.id, &serde_json::json!({"strict_mode": false})
+        ).unwrap());
+        assert!(db.register_owner_device(
+            "MONO-TEST-1234", &org.id, &other.id, "pipboy", &policies
+        ).is_err());
+
+        drop(db);
+        std::fs::remove_file(path).unwrap();
     }
 }

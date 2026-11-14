@@ -22,12 +22,37 @@ async function loadProductionExecutionPanel() {
       return;
     }
     const [engagements, plugins] = await Promise.all([window.janusRuntime.engagements(), window.janusRuntime.plugins()]);
-    const active = engagements.filter(item => item.active);
+    const active = engagements.filter(item => item.active && Array.isArray(item.scope?.approved_assets) && item.scope.approved_assets.length > 0);
+    const readyPlugins = plugins.filter(item => item.execution_ready === true);
+    const blockedPlugins = plugins.filter(item => item.execution_ready !== true);
     content.replaceChildren();
-    if (!active.length) { content.textContent = 'No active engagement exists. Production execution is unavailable.'; return; }
+    const capabilityNote = document.createElement('div');
+    capabilityNote.style.cssText = 'margin:6px 0;color:#ffd166';
+    capabilityNote.textContent = `Sandbox capability check: ${readyPlugins.length} ready · ${blockedPlugins.length} blocked. Declared capabilities are requests, not grants; ready does not guarantee the plugin's operation will succeed.`;
+    content.appendChild(capabilityNote);
+    if (!active.length) { const note = document.createElement('div'); note.textContent = 'No active engagement with approved assets exists. Production execution is unavailable.'; content.appendChild(note); return; }
+    if (!readyPlugins.length) { const note = document.createElement('div'); note.textContent = 'No plugin currently passes the production sandbox capability check. Unsupported capability requests must be implemented and explicitly approved before execution.'; content.appendChild(note); return; }
     const engagement = selectField('ENGAGEMENT', active.map(item => [item.id, `${item.authorization_reference} (${item.id})`]));
     const asset = selectField('APPROVED ASSET', active[0].scope.approved_assets.map(item => [item, item]));
-    const plugin = selectField('PLUGIN', plugins.map(item => [item.id, `${item.name} · ${item.category} · ${item.status}`]));
+    const plugin = selectField('PLUGIN', readyPlugins.map(item => [item.id, `${item.name} · ${item.category} · ${item.status}`]));
+    if (blockedPlugins.length) {
+      const blocked = document.createElement('details');
+      const summary = document.createElement('summary'); summary.textContent = `Blocked plugins (${blockedPlugins.length})`;
+      const list = document.createElement('ul');
+      blockedPlugins.slice(0, 100).forEach(item => {
+        const row = document.createElement('li');
+        const requested = Array.isArray(item.requested_capabilities) && item.requested_capabilities.length
+          ? item.requested_capabilities.join(', ')
+          : 'unknown capability declaration';
+        row.textContent = `${item.name} (${item.id}): ${requested}`;
+        list.appendChild(row);
+      });
+      blocked.append(summary, list); content.appendChild(blocked);
+    }
+    const argsLabel = document.createElement('label'); argsLabel.style.cssText = 'display:block;margin-top:7px'; argsLabel.textContent = 'PLUGIN INPUT (JSON OBJECT)';
+    const argsInput = document.createElement('textarea'); argsInput.rows = 4; argsInput.value = '{}'; argsInput.spellcheck = false;
+    argsInput.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin-top:4px;background:#100d06;color:#fff1c9;border:1px solid #8c6a2a;font:11px monospace';
+    argsLabel.appendChild(argsInput);
     const result = document.createElement('div'); result.style.marginTop = '8px'; result.style.color = '#ffe29a';
     const execute = document.createElement('button'); execute.type = 'button'; execute.textContent = 'REQUEST AUTHORIZED EXECUTION'; execute.style.marginTop = '8px';
     const syncAssets = () => {
@@ -38,12 +63,16 @@ async function loadProductionExecutionPanel() {
     execute.addEventListener('click', async () => {
       execute.disabled = true; result.textContent = 'Submitting protected runtime request...';
       try {
-        const output = await window.janusRuntime.execute(plugin.value, engagement.value, asset.value, {});
+        const args = JSON.parse(argsInput.value || '{}');
+        if (!args || Array.isArray(args) || typeof args !== 'object') {
+          throw new Error('Plugin input must be a JSON object.');
+        }
+        const output = await window.janusRuntime.execute(plugin.value, engagement.value, asset.value, args);
         result.textContent = `RUNTIME RESULT: ${JSON.stringify(output)}`;
       } catch (error) { result.textContent = `DENIED OR FAILED: ${error.message}`; }
       finally { execute.disabled = false; }
     });
-    [engagement.wrapper, asset.wrapper, plugin.wrapper, execute, result].forEach(node => content.appendChild(node));
+    [engagement.wrapper, asset.wrapper, plugin.wrapper, argsLabel, execute, result].forEach(node => content.appendChild(node));
   } catch (error) { content.textContent = `Production panel unavailable: ${error.message}`; }
 }
 

@@ -7,11 +7,17 @@ A bootable Arch Linux forensics and intelligence platform. Rust web server, Andr
 ## Quick Start
 
 ```bash
-git clone https://github.com/Wizardwalt/Janus-Omega-OS
-cd Janus-Omega-OS
-cargo run --bin janus-web
+git clone --recurse-submodules https://github.com/Wizardwalt/Janus-OS.git
+cd Janus-OS
+bash scripts/run-janus.sh
 # Open http://localhost:5000
 ```
+
+The launcher builds and starts both services:
+- **Janus Runtime API:** `127.0.0.1:8080`
+- **Janus Web UI:** `0.0.0.0:5000`
+
+The browser reaches the protected runtime through the web server's same-origin `/api` proxy. You do not need to expose port 8080 publicly.
 
 **Requirements:** Rust stable 1.80+, pkg-config, OpenSSL, libudev
 
@@ -73,40 +79,44 @@ Janus-Omega-OS/
 - **Contextual intelligence** — responds to forensics queries, network questions, casual conversation
 - **Idle thoughts** broadcast every 9 seconds
 
-### Module Launcher
-- **2,632 modules** across 17 categories executed by a real **Lua 5.4 VM** (`mlua`)
-- Live terminal output streamed line-by-line via **WebSocket** — every `print()`, `overseer_speak()`, `janus.log()` surfaces in real time
-- Android-style app tiles → module list → live terminal output
+### Module Library and Launcher
+
+- The repository contains a large Lua module library organized into categories.
+- The legacy Android-style module browser can enumerate these scripts. Its WebSocket runner is **demo-only** and requires `JANUS_DEMO_MODE=1`; simulated shell, ADB, and hardware calls are not real operations.
+- In production, the protected runtime loads plugins from the configured `plugins/` directory. Each request must pass account-role, organization add-on, engagement, asset, certification, and sandbox capability checks.
+- A module appearing in the legacy browser does not mean it is production-approved or executable through the protected runtime.
 
 ### Lua Sandbox APIs
 
+The production runtime creates a fresh Lua VM for each plugin, applies an instruction limit, and exposes JSON input as `args`. The only host capability currently available is:
+
 | Function | Behaviour |
 |----------|-----------|
-| `print(...)` | Streamed to terminal |
-| `overseer_speak(msg)` | `[OVERSEER] msg` |
-| `janus.log(msg)` | `[JANUS] msg` |
-| `janus.shell(cmd)` | Simulated shell output |
-| `janus.adb(cmd)` | Simulated ADB output |
-| `log_to_blackbox(tbl)` | Flight recorder entry |
-| `read_rotary_dial()` | Hardware dial value (1–100) |
-| `wait_for_haptic_confirmation(n)` | Returns `true` (authorised) |
-| `perform_core_action(...)` | Core op → `{status="success"}` |
-| `perform_advanced_action(...)` | Advanced op → `{status="success"}` |
-| `perform_final_action(...)` | Terminal op → `{status="success"}` |
-| `unleash_god_tier_power(...)` | God-tier power stub |
-| `unleash_legendary_power(...)` | Legendary power stub |
-| Any unknown global | Auto-stubbed via `__index` on `_G` — no crashes |
+| `janus.log(msg)` | Writes a sanitized, length-limited message to the runtime log |
+| `args` | Per-request JSON input; any Lua-side changes remain inside that execution |
 
-### Hardware Fleet
+Plugins may declare capabilities in their manifest, but declarations are requests, not grants. Until a vetted implementation and administrator approval flow exist, production execution rejects every requested capability except `logging`. Shell, ADB, filesystem, network, and hardware access are not exposed by the production plugin sandbox.
 
-| Device | Spec |
-|--------|------|
-| **Pandora Mk.1** | RP2040 USB glitcher / voltage injector |
-| **Pandora Omega** | Radxa CM5 cyberdeck (8-core, 16 GB RAM) |
-| **Pandora Titan** | 7" 21:9 forearm Pip-Boy · 5G/LTE · Wi-Fi 6E · IP68 · MIL-STD-810H |
+The legacy WebSocket Lua runner is available only when `JANUS_DEMO_MODE=1` is explicitly set. Its shell/ADB and hardware responses are simulations for UI development, not real device operations. Do not use demo output as evidence that a scan, extraction, or hardware action occurred.
 
-**Titan Exclusives:** Neural-Sync · AR-HUD · CBRN Suite · Kinetic Harvester · Ghost-Net mesh · Faraday cage · Quantum-resistant crypto · 24/7 blackbox recorder
+### ARIA status
 
+ARIA's current chat replies and periodic thoughts are scripted interface text. They do not represent a connected language model, live network monitoring, radio scanning, or persistent learning. Live AI integration and verified telemetry are future integrations; the interface must not present simulated text as operational results.
+
+### Hardware status
+
+The production hardware API reports an adapter as ready only after a real driver is connected and can verify its state.
+
+- **Serial:** real serial-port IO is implemented at 115200 baud with a 500 ms IO timeout. Configure a device path with `JANUS_SERIAL_PORT=/dev/ttyUSB0` before launching. Startup attempts to open only an explicitly configured path; failure leaves the adapter unavailable and does not prevent Janus from starting.
+- **GPIO, cellular, RF, and sensors:** drivers are not installed. Operations return explicit unsupported errors rather than simulated success.
+- **Disable hardware:** set `JANUS_HARDWARE_ENABLED=false` to disable all hardware integration.
+
+Examples:
+
+```bash
+JANUS_SERIAL_PORT=/dev/ttyUSB0 ./scripts/run-janus.sh
+JANUS_HARDWARE_ENABLED=false ./scripts/run-janus.sh
+```
 ---
 
 ## Development

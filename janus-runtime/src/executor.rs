@@ -15,6 +15,25 @@ pub struct PluginSummary {
     pub category: String,
     pub status: String,
     pub description: String,
+    /// Capabilities requested by the plugin manifest; requests are not grants.
+    pub requested_capabilities: Vec<String>,
+    /// Whether every requested capability is currently supported by the sandbox.
+    pub execution_ready: bool,
+}
+
+/// Validate manifest requests against the capabilities actually implemented
+/// by the production sandbox. An empty list is safe; logging is the only
+/// currently supported host capability and is always available.
+fn validate_plugin_capabilities(requested: &[String]) -> Result<()> {
+    for capability in requested {
+        if capability != "logging" {
+            anyhow::bail!(
+                "plugin requests unsupported or ungranted capability {:?}; execution is denied",
+                capability
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Plugin executor managing Lua runtime and plugin lifecycle.
@@ -50,6 +69,8 @@ impl PluginExecutor {
                 category: source.manifest.category.clone(),
                 status: source.manifest.status.clone(),
                 description: source.manifest.description.clone(),
+                requested_capabilities: source.manifest.capabilities.clone(),
+                execution_ready: validate_plugin_capabilities(&source.manifest.capabilities).is_ok(),
             })
             .collect())
     }
@@ -72,7 +93,9 @@ impl PluginExecutor {
         debug!(plugin_name, ?args, "Executing plugin");
 
         if let Some(plugin) = self.loader.get(plugin_name) {
-            // Execute plugin code
+            // Manifest declarations are requests, never grants. Until a capability
+            // has a vetted host implementation and an explicit grant path, deny it.
+            validate_plugin_capabilities(&plugin.manifest.capabilities)?;
             let sandbox = crate::lua::PluginSandbox::new()?;
             let result = sandbox.execute(&plugin.code, args)?;
             Ok(result)
@@ -84,5 +107,20 @@ impl PluginExecutor {
     /// Get plugin count
     pub fn plugin_count(&self) -> usize {
         self.loader.count()
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_policy_allows_only_safe_logging_or_no_capabilities() {
+        assert!(validate_plugin_capabilities(&[]).is_ok());
+        assert!(validate_plugin_capabilities(&["logging".to_string()]).is_ok());
+        assert!(validate_plugin_capabilities(&["network:wifi_scan".to_string()]).is_err());
+        assert!(validate_plugin_capabilities(&["shell".to_string()]).is_err());
+        assert!(validate_plugin_capabilities(&["filesystem:read".to_string()]).is_err());
     }
 }

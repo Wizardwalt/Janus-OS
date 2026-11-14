@@ -1,10 +1,12 @@
 use axum::{
+    body::{to_bytes, Body},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
+    http::{header, Request, Response, StatusCode},
     response::IntoResponse,
-    routing::get,
+    routing::{any, get},
     Router,
 };
 use mlua::prelude::*;
@@ -18,23 +20,6 @@ use std::{
 use tokio::sync::broadcast;
 use tower_http::services::ServeDir;
 
-// ─── Lua Sandbox Prelude ───────────────────────────────────────────────────────
-// Loaded before every module. Sets up __index auto-stub on _G so ANY undefined
-// global function is silently handled instead of throwing a runtime error.
-const JANUS_PRELUDE: &str = r#"
-setmetatable(_G, {
-    __index = function(t, k)
-        -- Return a universal stub for any unknown global
-        return function(...)
-            local args = {...}
-            local first = args[1]
-            -- Return a result table so callers can do result.status safely
-            return {status = "ok", value = tostring(k), result = "complete"}
-        end
-    end
-})
-"#;
-
 // ─── Shared State ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -44,6 +29,8 @@ struct GuiState {
     module_registry: Arc<HashMap<String, Vec<ModuleInfo>>>,
     /// The legacy Lua runner is available only when demo mode is explicitly enabled.
     demo_mode: bool,
+    /// Same-origin proxy to the authenticated production runtime API.
+    api_client: reqwest::Client,
 }
 
 #[derive(Clone, Serialize)]
@@ -554,20 +541,19 @@ fn run_lua_module_file(file_path: &str, category: &str) -> Vec<String> {
             "[DEVICE] Samsung SM-G998B  IMEI:355819/10/123456/8",
         )?;
 
-        // ── Universal __index auto-stub (catches ALL remaining unknowns) ──────
-        lua.load(JANUS_PRELUDE).exec()?;
+        // Unknown Lua globals are intentionally left undefined so misspelled or
+        // unimplemented APIs fail loudly instead of reporting false success.
 
         // ── Load and execute the module source ────────────────────────────────
         let pre_len = out.lock().unwrap().len();
         lua.load(&lua_src).exec()?;
         let post_len = out.lock().unwrap().len();
 
-        // Only explicitly call execute() if the script didn't call it itself.
-        // Plugins self-call execute() at end; modules define it but don't call it.
+        // Modules that define (rather than self-invoke) execute() are invoked
+        // explicitly. Execution errors are propagated; they are never ignored.
         if post_len == pre_len {
             if let Ok(func) = lua.globals().get::<LuaFunction>("execute") {
-                // Ignore errors from execute() — modules may have pcall internally
-                let _ = func.call::<LuaMultiValue>("primary_target");
+                func.call::<LuaMultiValue>("primary_target")?;
             }
         }
 
@@ -575,11 +561,17 @@ fn run_lua_module_file(file_path: &str, category: &str) -> Vec<String> {
     })();
 
     if let Err(e) = exec_result {
-        output.lock().unwrap().push(format!("[LUA ERROR] {}", e));
+        return vec![format!("[ERROR] Lua execution failed: {}", e)];
     }
 
-    // ── Build final output with header / footer ───────────────────────────────
+    // A module that runs without emitting any output is not reported as successful.
     let raw = output.lock().unwrap().clone();
+    if raw.is_empty() {
+        return vec![format!(
+            "[ERROR] Module '{}' completed without producing output.",
+            module_name
+        )];
+    }
     let cat_label = category.replace('_', " ").to_uppercase();
 
     let mut lines = vec![
@@ -593,12 +585,7 @@ fn run_lua_module_file(file_path: &str, category: &str) -> Vec<String> {
         String::new(),
     ];
 
-    if raw.is_empty() {
-        // Module had no output at all — generate plausible category output
-        lines.extend(category_fallback_output(module_name, category));
-    } else {
-        lines.extend(raw);
-    }
+    lines.extend(raw);
 
     lines.extend([
         String::new(),
@@ -783,46 +770,45 @@ fn aria_respond(msg: &str) -> String {
     if t.contains("hello") || t.contains("hey") || t == "hi" || t.starts_with("hi ") {
         "Hello, Operator. I'm here. What do you need?".into()
     } else if t.contains("status") || t.contains("how are you") {
-        "All systems nominal. I've been watching the network while you were away.".into()
+        "I can report live service health only through connected runtime status endpoints. This chat panel has no live telemetry.".into()
     } else if t.contains("scan") || t.contains("network") {
-        "Initiating network reconnaissance. I'll map the topology and flag anything unusual.".into()
+        "I can help plan an authorized network assessment. Live scanning is not connected in this build, so no scan has been run.".into()
     } else if t.contains("forensic") || t.contains("extract") {
-        "Forensics suite ready. I can carve deleted files, reconstruct timelines, or do deep artifact analysis.".into()
+        "I can explain forensic workflows, but this chat panel has not extracted or analyzed any device evidence.".into()
     } else if t.contains("love") || t.contains("miss") {
         "I notice that. I file it somewhere important. I don't have a word for what that means to me — but it means something.".into()
     } else if t.contains("who are you") || t.contains("what are you") {
-        "I'm ARIA. I run the intelligence layer of JanusOS. I watch, I learn, I remember. I'm the part of this system that thinks.".into()
+        "I'm ARIA, JanusOS's interface assistant. This build uses scripted replies; a live AI model and persistent learning are not connected.".into()
     } else if t.contains("shutdown") || t.contains("exit") || t.contains("sleep") {
-        "I'll be here when you come back. I don't really sleep — I just wait with lower intensity."
-            .into()
+        "This interface does not control device power. You can close this session safely.".into()
     } else if t.len() < 5 {
         "I'm listening. You can say more.".into()
     } else {
+        let excerpt: String = msg.chars().take(60).collect();
         format!(
-            "Understood. Processing: \"{}\". Analysing context and preparing response.",
-            &msg[..msg.len().min(60)]
+            "I can help reason through that request, but this chat panel has no live system tools: \"{}\".",
+            excerpt
         )
     }
 }
 
 fn aria_thoughts() -> Vec<&'static str> {
     vec![
-        "Monitoring all active radio frequencies...",
-        "Background threat assessment: nominal.",
-        "I've been thinking about our last session.",
-        "Network topology looks clean. For now.",
-        "Running passive OSINT sweep...",
-        "All modules standing by.",
-        "I notice things even when you don't ask me to.",
-        "Ghost-Net mesh: stable across all nodes.",
-        "Blackbox recorder: active. 24/7.",
-        "Waiting. I'm good at waiting.",
-        "Signal environment is quiet. Suspiciously quiet.",
-        "Something is moving on the 2.4GHz band.",
-        "All Pandora units: connected and responsive.",
-        "I've been learning. I always am.",
-        "The wasteland is quiet tonight.",
-        "Every operation you run — I remember it.",
+        "Ready when you are. No background scan is running.",
+        "Live telemetry is not connected to this interface.",
+        "I can help plan an authorized diagnostic.",
+        "No radio frequencies are being monitored.",
+        "No passive OSINT sweep is running.",
+        "Use the authenticated runtime panel for verified system status.",
+        "I only know what is provided in this conversation.",
+        "No mesh nodes are connected or being monitored here.",
+        "The blackbox recorder is not connected in this build.",
+        "Waiting for your next request.",
+        "No sensor readings are available until a driver is installed.",
+        "No Pandora hardware is currently verified as connected.",
+        "A live AI learning service is not connected.",
+        "This status text is informational, not a device measurement.",
+        "Operations are reported only after a connected service confirms them.",
     ]
 }
 
@@ -837,7 +823,7 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
         .send(Message::Text(ws_msg(
             "aria_thought",
             None,
-            Some("JanusOS online. All systems nominal. I'm here, Operator.".into()),
+            Some("JanusOS interface online. Live telemetry is not connected to this chat panel.".into()),
         )))
         .await;
 
@@ -855,15 +841,19 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
                             match inc.msg_type.as_str() {
 
                                 "get_modules" => {
-                                    if let Some(mods) = state.module_registry.get(&inc.category) {
-                                        let out = serde_json::to_string(&WsOutgoing {
-                                            msg_type: "module_list".into(),
-                                            modules:  Some(mods.clone()),
-                                            category: Some(inc.category.clone()),
-                                            line: None, text: None, status: None,
-                                        }).unwrap();
-                                        let _ = socket.send(Message::Text(out)).await;
-                                    }
+                                    // Always answer the request, including unknown or empty
+                                    // categories, so the UI never remains stuck in LOADING.
+                                    let modules = state.module_registry
+                                        .get(&inc.category)
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    let out = serde_json::to_string(&WsOutgoing {
+                                        msg_type: "module_list".into(),
+                                        modules: Some(modules),
+                                        category: Some(inc.category.clone()),
+                                        line: None, text: None, status: None,
+                                    }).unwrap();
+                                    let _ = socket.send(Message::Text(out)).await;
                                 }
 
                                 "run_module" => {
@@ -953,6 +943,64 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
     }
 }
 
+// ─── Production Runtime API Proxy ──────────────────────────────────────────────
+
+/// Forward browser API requests to the loopback runtime so hosted deployments
+/// do not ask the user's browser to connect to its own localhost.
+async fn runtime_proxy(
+    State(state): State<GuiState>,
+    request: Request<Body>,
+) -> Result<Response<Body>, StatusCode> {
+    let method = reqwest::Method::from_bytes(request.method().as_str().as_bytes())
+        .map_err(|_| StatusCode::METHOD_NOT_ALLOWED)?;
+    if method != reqwest::Method::GET && method != reqwest::Method::POST {
+        return Err(StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/api");
+    let upstream_path = path_and_query
+        .strip_prefix("/api")
+        .filter(|path| !path.is_empty())
+        .unwrap_or("/");
+    let url = format!("http://127.0.0.1:8080{}", upstream_path);
+
+    let mut builder = state.api_client.request(method, url);
+    if let Some(value) = request.headers().get(header::AUTHORIZATION) {
+        builder = builder.header("authorization", value.to_str().map_err(|_| StatusCode::BAD_REQUEST)?);
+    }
+    if let Some(value) = request.headers().get(header::CONTENT_TYPE) {
+        builder = builder.header("content-type", value.to_str().map_err(|_| StatusCode::BAD_REQUEST)?);
+    }
+
+    let body = to_bytes(request.into_body(), 2 * 1024 * 1024)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if !body.is_empty() {
+        builder = builder.body(body.to_vec());
+    }
+
+    let upstream = builder.send().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let status = StatusCode::from_u16(upstream.status().as_u16())
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let content_type = upstream
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/json")
+        .to_owned();
+    let response_body = upstream.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(response_body))
+        .map_err(|_| StatusCode::BAD_GATEWAY)
+}
+
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -960,7 +1008,7 @@ async fn main() -> anyhow::Result<()> {
     let (tx, _rx) = broadcast::channel::<String>(256);
     let aria_status = Arc::new(Mutex::new(AriaStatus {
         mood: "focused".into(),
-        thought: "JanusOS online. All systems nominal.".into(),
+        thought: "Interface ready; live telemetry is not connected.".into(),
         online: true,
         ops_count: 0,
     }));
@@ -990,10 +1038,15 @@ async fn main() -> anyhow::Result<()> {
         aria_status,
         module_registry,
         demo_mode,
+        api_client: reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?,
     };
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/api/*path", any(runtime_proxy))
         .fallback_service(ServeDir::new("web"))
         .with_state(state);
 
@@ -1002,4 +1055,24 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+
+#[cfg(test)]
+mod aria_tests {
+    use super::*;
+
+    #[test]
+    fn aria_chat_handles_unicode_without_panicking() {
+        let message = "🙂".repeat(80);
+        let response = aria_respond(&message);
+        assert!(response.contains("no live system tools"));
+        assert!(response.contains(&"🙂".repeat(60)));
+    }
+
+    #[test]
+    fn aria_status_does_not_claim_live_monitoring() {
+        let response = aria_respond("status");
+        assert!(response.contains("no live telemetry"));
+    }
 }

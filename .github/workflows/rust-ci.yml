@@ -2,9 +2,9 @@ name: JanusOS CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, repair/janus-os-full-repair ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, repair/janus-os-full-repair ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -46,6 +46,9 @@ jobs:
       - name: Cargo check (full workspace)
         run: cargo check --workspace
 
+      - name: Run workspace tests
+        run: cargo test --workspace
+
       - name: Verify web frontend files exist
         run: |
           echo "Checking required web assets..."
@@ -56,6 +59,17 @@ jobs:
               echo "  MISSING: $f" && exit 1
             fi
           done
+
+      - name: Check browser JavaScript syntax
+        run: |
+          for f in web/app.js web/aria*.js web/runtime_*.js; do
+            [ -f "$f" ] || continue
+            echo "Checking $f"
+            node --check "$f"
+          done
+
+      - name: Check launcher shell syntax
+        run: bash -n scripts/run-janus.sh
 
       - name: Count modules
         run: |

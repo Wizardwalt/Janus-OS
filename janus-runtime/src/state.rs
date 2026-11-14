@@ -3,13 +3,60 @@
 use crate::database::Database;
 use anyhow::Result;
 use janus_core::{
-    hash_password, AuditEntry, AuditLog, Config, Organization, StateKey, SystemState, UserAccount,
+    hash_password, AuditEntry, AuditLog, Config, Organization, StateKey, UserAccount,
     UserRole,
 };
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::debug;
+
+const OWNER_POLICY_DEFAULTS: &[(&str, bool)] = &[
+    ("require_approval_for_sensitive", true),
+    ("remote_access_enabled", false),
+    ("cloud_provider_enabled", false),
+    ("microphone_enabled", false),
+    ("hardware_modules_enabled", false),
+    ("strict_mode", true),
+];
+
+fn validate_owner_device_identity(device_id: &str, device_type: &str) -> Result<()> {
+    let device_id = device_id.trim();
+    if !(8..=128).contains(&device_id.len())
+        || !device_id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        anyhow::bail!("device_id must be 8-128 ASCII letters, numbers, hyphens, or underscores");
+    }
+    if !matches!(device_type, "monolith" | "pipboy") {
+        anyhow::bail!("device_type must be 'monolith' or 'pipboy'");
+    }
+    Ok(())
+}
+
+fn merge_owner_policy(
+    current: Option<serde_json::Value>,
+    requested: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let object = requested.as_object()
+        .ok_or_else(|| anyhow::anyhow!("policies must be a JSON object"))?;
+    let allowed = OWNER_POLICY_DEFAULTS.iter().map(|(key, _)| *key).collect::<Vec<_>>();
+    if object.is_empty()
+        || object.keys().any(|key| !allowed.contains(&key.as_str()))
+        || object.values().any(|value| !value.is_boolean())
+    {
+        anyhow::bail!("policy updates must contain only allowlisted boolean settings");
+    }
+    let mut policies = current.unwrap_or_else(|| {
+        serde_json::Value::Object(OWNER_POLICY_DEFAULTS.iter()
+            .map(|(key, value)| ((*key).to_string(), serde_json::Value::Bool(*value)))
+            .collect())
+    });
+    let stored = policies.as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("stored device policy is invalid"))?;
+    for (key, value) in object {
+        stored.insert(key.clone(), value.clone());
+    }
+    Ok(policies)
+}
 
 /// Authenticated session returned only after password verification.
 pub struct LoginSession {
@@ -21,7 +68,6 @@ pub struct LoginSession {
 /// State manager with persistence layer.
 pub struct StateManager {
     config: Config,
-    state: Arc<RwLock<SystemState>>,
     db: Arc<Database>,
 }
 
@@ -32,10 +78,8 @@ impl StateManager {
             "Initializing state manager with DB: {}",
             config.db_path.display()
         );
-        let state = db.load_all_state()?;
         Ok(Self {
             config: config.clone(),
-            state: Arc::new(RwLock::new(state)),
             db,
         })
     }
@@ -506,29 +550,193 @@ impl StateManager {
         Ok(())
     }
 
-    /// Get current state
-    pub async fn get_state(&self) -> Result<SystemState> {
-        Ok(self.state.read().await.clone())
+    /// Register a Monolith or Pip-Boy to the authenticated purchaser account.
+    /// Password re-entry makes the initial ownership claim an intentional action.
+    pub async fn register_owned_device(
+        &self,
+        account: &janus_core::UserAccount,
+        password: &str,
+        device_id: &str,
+        device_type: &str,
+    ) -> Result<serde_json::Value> {
+        if !account.role.may_administer_organization() {
+            anyhow::bail!("only an organization administrator can initialize device ownership");
+        }
+        let device_id = device_id.trim();
+        validate_owner_device_identity(device_id, device_type)?;
+        let stored = self.db.find_user_by_email(&account.email)?
+            .ok_or_else(|| anyhow::anyhow!("owner account was not found"))?;
+        if !janus_core::verify_password(password, &stored.password_hash)? {
+            self.db.record(
+                AuditEntry::new(&account.id, "DEVICE_OWNER_AUTH_FAILURE", device_id)
+                    .failed("password re-authentication failed"),
+            )?;
+            anyhow::bail!("owner password verification failed");
+        }
+        let policies = merge_owner_policy(None, &serde_json::json!({
+            "require_approval_for_sensitive": true,
+            "remote_access_enabled": false,
+            "cloud_provider_enabled": false,
+            "microphone_enabled": false,
+            "hardware_modules_enabled": false,
+            "strict_mode": true
+        }))?;
+        self.db.register_owner_device(
+            device_id, &account.organization_id, &account.id, device_type, &policies,
+        )?;
+        self.db.record(
+            AuditEntry::new(&account.id, "DEVICE_OWNER_ENROLLED", device_id)
+                .success()
+                .with_metadata(serde_json::json!({"device_type": device_type})),
+        )?;
+        Ok(serde_json::json!({
+            "device_id": device_id,
+            "device_type": device_type,
+            "policies": policies
+        }))
     }
 
-    /// Get single state value
-    pub async fn get(&self, key: &StateKey) -> Result<Option<serde_json::Value>> {
-        Ok(self.state.read().await.get(key).cloned())
+    /// List only devices registered to the authenticated account.
+    pub async fn owned_devices(
+        &self,
+        account: &janus_core::UserAccount,
+    ) -> Result<Vec<serde_json::Value>> {
+        self.db.list_owned_devices(&account.id).map(|devices| {
+            devices.into_iter().map(|(device_id, device_type, policies)| {
+                serde_json::json!({
+                    "device_id": device_id,
+                    "device_type": device_type,
+                    "policies": policies
+                })
+            }).collect()
+        })
     }
 
-    /// Update state
-    pub async fn update_state(&self, key: &StateKey, value: serde_json::Value) -> Result<()> {
-        self.state.write().await.set(key, value.clone());
-        self.db.set_state(key, &value)?;
+    /// Update a device's allowlisted configurable security switches after fresh
+    /// owner password verification. Core integrity boundaries are not configurable.
+    pub async fn update_owned_device_policy(
+        &self,
+        account: &janus_core::UserAccount,
+        device_id: &str,
+        password: &str,
+        requested: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        if !account.role.may_administer_organization() {
+            anyhow::bail!("only an organization administrator can change device security policies");
+        }
+        validate_owner_device_identity(device_id, "monolith")
+            .or_else(|_| validate_owner_device_identity(device_id, "pipboy"))?;
+        let changed_settings = requested
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("policies must be a JSON object"))?
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let stored = self.db.find_user_by_email(&account.email)?
+            .ok_or_else(|| anyhow::anyhow!("owner account was not found"))?;
+        if stored.account.id != account.id
+            || !janus_core::verify_password(password, &stored.password_hash)?
+        {
+            self.db.record(
+                AuditEntry::new(&account.id, "DEVICE_POLICY_AUTH_FAILURE", device_id)
+                    .failed("password re-authentication failed"),
+            )?;
+            anyhow::bail!("owner password verification failed");
+        }
+        let (organization_id, device_type, current_policies) =
+            self.db.get_owned_device(device_id, &account.id)?
+                .ok_or_else(|| anyhow::anyhow!("device is not registered to this owner"))?;
+        if organization_id != account.organization_id {
+            anyhow::bail!("device ownership organization mismatch");
+        }
+        let policies = merge_owner_policy(Some(current_policies), &requested)?;
+        if !self.db.update_owned_device_policy(device_id, &account.id, &policies)? {
+            anyhow::bail!("device policy update did not affect an owned device");
+        }
+        self.db.record(
+            AuditEntry::new(&account.id, "DEVICE_SECURITY_POLICY_UPDATED", device_id)
+                .success()
+                .with_metadata(serde_json::json!({
+                    "device_type": device_type,
+                    "changed_settings": changed_settings,
+                    "policies": policies
+                })),
+        )?;
+        Ok(policies)
+    }
+
+    /// Read a state value only within the authenticated account's organization.
+    pub async fn get(
+        &self,
+        account: &UserAccount,
+        key: &StateKey,
+    ) -> Result<Option<serde_json::Value>> {
+        self.db.get_organization_state(&account.organization_id, key)
+    }
+
+    /// Update a state value within the authenticated organization.
+    pub async fn update_state(
+        &self,
+        account: &UserAccount,
+        key: &StateKey,
+        value: serde_json::Value,
+    ) -> Result<()> {
+        if !account.role.may_modify_state() {
+            anyhow::bail!("role is not allowed to modify state");
+        }
+        self.db
+            .set_organization_state(&account.organization_id, key, &value)?;
+        self.db.record(
+            AuditEntry::new(&account.id, "ORGANIZATION_STATE_UPDATED", &key.fqn())
+                .success()
+                .with_metadata(serde_json::json!({
+                    "organization_id": account.organization_id,
+                    "namespace": key.namespace,
+                    "key": key.key
+                })),
+        )?;
         Ok(())
     }
+}
 
-    /// Remove state value
-    pub async fn remove(&self, key: &StateKey) -> Result<Option<serde_json::Value>> {
-        let removed = self.state.write().await.remove(key);
-        if removed.is_some() {
-            self.db.remove_state(key)?;
-        }
-        Ok(removed)
+#[cfg(test)]
+mod owner_policy_tests {
+    use super::*;
+
+    #[test]
+    fn owner_device_identity_requires_valid_id_and_known_device_type() {
+        assert!(validate_owner_device_identity("MONO-123456", "monolith").is_ok());
+        assert!(validate_owner_device_identity("PIPBOY_123", "pipboy").is_ok());
+        assert!(validate_owner_device_identity("short", "monolith").is_err());
+        assert!(validate_owner_device_identity("../outside-123", "pipboy").is_err());
+        assert!(validate_owner_device_identity("VALID-123456", "unknown").is_err());
+    }
+
+    #[test]
+    fn owner_policy_rejects_unknown_keys_and_non_boolean_values() {
+        assert!(merge_owner_policy(None, &serde_json::json!({"shell_access": true})).is_err());
+        assert!(merge_owner_policy(None, &serde_json::json!({"remote_access_enabled": "yes"})).is_err());
+        assert!(merge_owner_policy(None, &serde_json::json!({})).is_err());
+        assert!(merge_owner_policy(None, &serde_json::json!([])).is_err());
+    }
+
+    #[test]
+    fn owner_policy_preserves_existing_values_when_one_setting_changes() {
+        let existing = serde_json::json!({
+            "require_approval_for_sensitive": true,
+            "remote_access_enabled": false,
+            "cloud_provider_enabled": true,
+            "microphone_enabled": false,
+            "hardware_modules_enabled": false,
+            "strict_mode": true
+        });
+        let updated = merge_owner_policy(
+            Some(existing),
+            &serde_json::json!({"remote_access_enabled": true}),
+        ).unwrap();
+        assert_eq!(updated["remote_access_enabled"], true);
+        assert_eq!(updated["cloud_provider_enabled"], true);
+        assert_eq!(updated["strict_mode"], true);
     }
 }
+

@@ -147,6 +147,12 @@ struct ExecuteRequest {
     args: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+struct OwnerDeviceRegisterRequest { device_id: String, device_type: String, password: String }
+
+#[derive(Deserialize)]
+struct OwnerDevicePolicyRequest { password: String, policies: serde_json::Value }
+
 #[derive(Serialize, Deserialize)]
 struct StateRequest {
     namespace: String,
@@ -213,6 +219,8 @@ impl ApiServer {
             .route("/auth/users", get(list_users).post(create_user))
             .route("/auth/users/:user_id/disable", post(disable_user))
             .route("/auth/users/:user_id/enable", post(enable_user))
+            .route("/owner/devices", get(list_owned_devices).post(register_owned_device))
+            .route("/owner/devices/:device_id/policies", post(update_owned_device_policy))
             .route(
                 "/auth/users/:user_id/password-reset",
                 post(reset_user_password),
@@ -250,6 +258,39 @@ impl ApiServer {
 
         axum::serve(listener, app).await?;
         Ok(())
+    }
+}
+
+async fn list_owned_devices(AxumState(state): AxumState<ApiState>, headers: HeaderMap)
+    -> (StatusCode, Json<ApiResponse<Vec<serde_json::Value>>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account, Err(error) => return unauthorized_response(error),
+    };
+    match state.state_manager.owned_devices(&account).await {
+        Ok(devices) => (StatusCode::OK, Json(ApiResponse { status: "success".into(), data: Some(devices), error: None })),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
+    }
+}
+
+async fn register_owned_device(AxumState(state): AxumState<ApiState>, headers: HeaderMap, Json(request): Json<OwnerDeviceRegisterRequest>)
+    -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account, Err(error) => return unauthorized_response(error),
+    };
+    match state.state_manager.register_owned_device(&account, &request.password, &request.device_id, &request.device_type).await {
+        Ok(device) => (StatusCode::CREATED, Json(ApiResponse { status: "success".into(), data: Some(device), error: None })),
+        Err(error) => (StatusCode::FORBIDDEN, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
+    }
+}
+
+async fn update_owned_device_policy(AxumState(state): AxumState<ApiState>, headers: HeaderMap, Path(device_id): Path<String>, Json(request): Json<OwnerDevicePolicyRequest>)
+    -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account, Err(error) => return unauthorized_response(error),
+    };
+    match state.state_manager.update_owned_device_policy(&account, &device_id, &request.password, request.policies).await {
+        Ok(policies) => (StatusCode::OK, Json(ApiResponse { status: "success".into(), data: Some(policies), error: None })),
+        Err(error) => (StatusCode::FORBIDDEN, Json(ApiResponse { status: "error".into(), data: None, error: Some(error.to_string()) })),
     }
 }
 
@@ -835,6 +876,33 @@ async fn execute(
             }),
         );
     }
+    // The organization-wide add-on switch is persisted in runtime state. Missing
+    // state preserves existing installations; an explicit false disables execution.
+    let addons_key = StateKey::new("system", "addons_enabled");
+    match state.state_manager.get(&account, &addons_key).await {
+        Ok(Some(value)) if value == serde_json::Value::Bool(false) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse {
+                    status: "error".into(),
+                    data: None,
+                    error: Some("Janus add-ons are disabled by the organization administrator".into()),
+                }),
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    status: "error".into(),
+                    data: None,
+                    error: Some(format!("could not verify add-on setting: {error}")),
+                }),
+            );
+        }
+    }
+
     let module_sha256 = match state.executor.plugin_sha256(&req.plugin) {
         Ok(hash) => hash,
         Err(error) => {
@@ -967,11 +1035,12 @@ async fn get_state(
     headers: HeaderMap,
     Path((namespace, key)): Path<(String, String)>,
 ) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
-    if let Err(error) = authenticated_account(&state.state_manager, &headers).await {
-        return unauthorized_response(error);
-    }
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account,
+        Err(error) => return unauthorized_response(error),
+    };
     let state_key = StateKey::new(namespace, key);
-    match state.state_manager.get(&state_key).await {
+    match state.state_manager.get(&account, &state_key).await {
         Ok(Some(value)) => (
             StatusCode::OK,
             Json(ApiResponse {
@@ -1020,7 +1089,7 @@ async fn set_state(
         );
     }
     let state_key = StateKey::new(namespace, key);
-    match state.state_manager.update_state(&state_key, req).await {
+    match state.state_manager.update_state(&account, &state_key, req).await {
         Ok(_) => (
             StatusCode::OK,
             Json(ApiResponse {

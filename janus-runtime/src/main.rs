@@ -47,6 +47,14 @@ struct Args {
     #[arg(short = 'P', long, value_name = "PORT")]
     port: Option<u16>,
 
+    /// Serial device path to open during startup (for example /dev/ttyUSB0)
+    #[arg(long, value_name = "PATH")]
+    serial_port: Option<String>,
+
+    /// Disable all hardware integration
+    #[arg(long, default_value_t = false)]
+    disable_hardware: bool,
+
     /// Log level
     #[arg(long, value_name = "LEVEL", default_value = "info")]
     log_level: String,
@@ -83,6 +91,12 @@ async fn main() -> Result<()> {
     if let Some(port) = args.port {
         config.web_port = port;
     }
+    if let Some(serial_port) = args.serial_port {
+        config.serial_port = Some(serial_port);
+    }
+    if args.disable_hardware {
+        config.hardware_enabled = false;
+    }
 
     config.validate()?;
 
@@ -106,7 +120,7 @@ async fn main() -> Result<()> {
     info!("Plugin executor initialized");
 
     // Initialize hardware manager
-    let hw_manager = hardware::HardwareManager::new(config.serial_port.clone());
+    let hw_manager = hardware::HardwareManager::new(config.serial_port.clone(), config.hardware_enabled);
     hw_manager.initialize().await?;
     info!("Hardware manager initialized");
 

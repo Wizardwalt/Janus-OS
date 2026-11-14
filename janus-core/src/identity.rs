@@ -32,7 +32,7 @@ impl UserRole {
 
     /// Whether this role may record production module certification decisions.
     pub fn may_certify_modules(self) -> bool {
-        matches!(self, Self::Reviewer)
+        matches!(self, Self::PlatformBreakGlassAdmin)
     }
 
     /// Whether this role may modify protected organization/runtime state.
@@ -146,7 +146,8 @@ mod role_tests {
 
         assert!(UserRole::OrganizationAdmin.may_administer_organization());
         assert!(!UserRole::Operator.may_administer_organization());
-        assert!(UserRole::Reviewer.may_certify_modules());
+        assert!(UserRole::PlatformBreakGlassAdmin.may_certify_modules());
+        assert!(!UserRole::Reviewer.may_certify_modules());
         assert!(!UserRole::OrganizationAdmin.may_certify_modules());
         assert!(UserRole::OrganizationAdmin.may_view_audit_logs());
         assert!(UserRole::Reviewer.may_view_audit_logs());

@@ -33,11 +33,11 @@ outputType = "vnc"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cargo run --bin janus-web"
+args = "bash scripts/run-janus.sh"
 
 [deployment]
 deploymentTarget = "vm"
-run = ["cargo", "run", "--release", "--bin", "janus-web"]
+run = ["bash", "scripts/run-janus.sh"]
 
 [[ports]]
 localPort = 5000

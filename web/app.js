@@ -13,16 +13,52 @@ let wsReady  = false;
 let currentCategory = null;
 let opsCount = 0;
 
+const wsQueue = [];
+
+function setConnectionLabel(label) {
+  const indicator = document.querySelector('.aria-online');
+  if (indicator) indicator.textContent = label;
+}
+
 function connectWS() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen    = () => { wsReady = true; };
-  ws.onmessage = (e) => { try { handleWsMessage(JSON.parse(e.data)); } catch(ex) {} };
-  ws.onclose   = () => { wsReady = false; setTimeout(connectWS, 2000); };
-  ws.onerror   = () => ws.close();
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${protocol}//${location.host}/ws`);
+  ws = socket;
+  setConnectionLabel('● CONNECTING');
+  socket.onopen = () => {
+    wsReady = true;
+    setConnectionLabel('● ONLINE');
+    while (wsQueue.length && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(wsQueue.shift()));
+    }
+  };
+  socket.onmessage = (event) => {
+    try {
+      handleWsMessage(JSON.parse(event.data));
+    } catch (error) {
+      console.error('[JANUS] Invalid WebSocket message', error);
+    }
+  };
+  socket.onclose = () => {
+    if (ws !== socket) return;
+    wsReady = false;
+    setConnectionLabel('● OFFLINE · RECONNECTING');
+    setTimeout(connectWS, 2000);
+  };
+  socket.onerror = () => socket.close();
 }
 
 function wsSend(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  const payload = JSON.stringify(obj);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(payload);
+  } else if (wsQueue.length < 100) {
+    wsQueue.push(obj);
+    connectWS();
+  } else {
+    appendTerminalLine('[ERROR] Connection queue is full. Please retry.');
+  }
 }
 
 function handleWsMessage(msg) {

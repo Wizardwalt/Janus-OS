@@ -4,7 +4,13 @@
 
 class JanusRuntimeApi {
   constructor() {
-    this.baseUrl = localStorage.getItem('janus.runtimeUrl') || 'http://localhost:8080';
+    const savedUrl = localStorage.getItem('janus.runtimeUrl');
+    // Migrate the old localhost default: in hosted browsers, localhost refers
+    // to the operator's device, not the Janus server. /api is same-origin.
+    this.baseUrl = !savedUrl || savedUrl === 'http://localhost:8080'
+      ? `${window.location.origin}/api`
+      : savedUrl;
+    if (this.baseUrl !== savedUrl) localStorage.setItem('janus.runtimeUrl', this.baseUrl);
     this.token = sessionStorage.getItem('janus.sessionToken') || null;
   }
 
@@ -53,12 +59,26 @@ class JanusRuntimeApi {
   engagements() { return this.request('/engagements'); }
   licenseStatus() { return this.request('/licenses/status'); }
   auditLogs() { return this.request('/audit/logs'); }
+  getState(namespace, key) { return this.request(`/state/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`); }
+  setState(namespace, key, value) { return this.request(`/state/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`, { method: 'POST', body: JSON.stringify(value) }); }
   plugins() { return this.request('/plugins'); }
   hardwareStatus() { return this.request('/hardware/status'); }
   users() { return this.request('/auth/users'); }
   setUserActive(userId, active) { return this.request(`/auth/users/${encodeURIComponent(userId)}/${active ? 'enable' : 'disable'}`, { method: 'POST' }); }
   resetUserPassword(userId, password) { return this.request(`/auth/users/${encodeURIComponent(userId)}/password-reset`, { method: 'POST', body: JSON.stringify({ password }) }); }
   setEngagementActive(id, active) { return this.request(`/engagements/${encodeURIComponent(id)}/${active ? 'enable' : 'disable'}`, { method: 'POST' }); }
+
+  ownedDevices() { return this.request('/owner/devices'); }
+  registerOwnedDevice(deviceId, deviceType, password) {
+    return this.request('/owner/devices', {
+      method: 'POST', body: JSON.stringify({ device_id: deviceId, device_type: deviceType, password }),
+    });
+  }
+  updateOwnedDevicePolicy(deviceId, password, policies) {
+    return this.request(`/owner/devices/${encodeURIComponent(deviceId)}/policies`, {
+      method: 'POST', body: JSON.stringify({ password, policies }),
+    });
+  }
 
   execute(plugin, engagementId, targetAsset, args = {}) {
     return this.request('/execute', {
