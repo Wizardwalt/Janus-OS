@@ -32,7 +32,14 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 printf '[JANUS] Starting protected runtime API...\n'
-./target/debug/janus-runtime &
+RUNTIME_ARGS=()
+if [[ -n "${JANUS_SERIAL_PORT:-}" ]]; then
+  RUNTIME_ARGS+=(--serial-port "$JANUS_SERIAL_PORT")
+fi
+case "${JANUS_HARDWARE_ENABLED:-true}" in
+  0|false|FALSE|no|NO) RUNTIME_ARGS+=(--disable-hardware) ;;
+esac
+./target/debug/janus-runtime "${RUNTIME_ARGS[@]}" &
 RUNTIME_PID=$!
 
 ready=0
