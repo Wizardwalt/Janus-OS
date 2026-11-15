@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>JANUS // Arena Archive Importer</title>
+  <style>
+    :root { color-scheme: dark; --bg:#07100d; --panel:#0d1b15; --line:#254a36; --green:#8dffad; --muted:#9ab4a2; --amber:#ffd27a; --red:#ff8f8f; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:radial-gradient(ellipse at top,#10251a 0,#07100d 60%); color:#e4f5e9; font:16px/1.5 system-ui,sans-serif; min-height:100vh; }
+    main { width:min(920px,100%); margin:auto; padding:24px 16px 48px; }
+    header { border-bottom:1px solid var(--line); padding-bottom:18px; margin-bottom:20px; }
+    .eyebrow { color:var(--green); letter-spacing:.16em; font-size:.75rem; font-weight:700; }
+    h1 { margin:.25rem 0; font-size:clamp(1.7rem,6vw,2.6rem); line-height:1.1; }
+    h1 span { color:var(--green); }
+    p { color:var(--muted); }
+    .panel { background:rgba(13,27,21,.94); border:1px solid var(--line); border-radius:14px; padding:18px; margin:16px 0; }
+    .drop { border:2px dashed #477557; border-radius:12px; padding:24px 14px; text-align:center; background:#0a1710; }
+    .drop.drag { border-color:var(--green); background:#10291a; }
+    input[type=file] { display:block; width:100%; margin:16px 0; color:var(--muted); }
+    button { border:1px solid #5d9c70; border-radius:9px; padding:11px 15px; color:#06110a; background:var(--green); font-weight:800; cursor:pointer; min-height:44px; }
+    button.secondary { background:#14291c; color:var(--green); }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+    .hint { font-size:.9rem; }
+    .stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+    .stat { background:#09150f; border:1px solid var(--line); border-radius:10px; padding:12px; }
+    .stat strong { display:block; color:var(--green); font-size:1.6rem; }
+    #status { min-height:1.5em; color:var(--amber); overflow-wrap:anywhere; }
+    progress { width:100%; height:12px; accent-color:var(--green); }
+    ul { padding-left:20px; }
+    li { margin:.35rem 0; overflow-wrap:anywhere; }
+    .ok { color:var(--green); } .warn { color:var(--amber); } .error { color:var(--red); }
+    .privacy { border-left:3px solid var(--green); padding-left:12px; }
+    details { margin-top:12px; }
+    summary { cursor:pointer; color:var(--green); }
+    code { color:#c6f5d1; }
+    @media(max-width:520px) { main{padding:18px 12px 36px}.panel{padding:14px}.stats{grid-template-columns:1fr 1fr}.stat:last-child{grid-column:span 2}.actions button{width:100%} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">JANUS OMEGA // ARCHIVE TOOLS</div>
+    <p><a href="/" style="color:var(--green)">← BACK TO JANUSOS</a></p>
+    <h1>ARENA CHAT <span>IMPORTER</span></h1>
+    <p>Bring your LM Arena / arena.ai conversation exports into one searchable, portable archive.</p>
+  </header>
+  <section class="panel">
+    <h2>1. Select your Arena exports</h2>
+    <div class="drop" id="drop-zone">
+      <strong>Choose ZIP archives or JSON exports</strong>
+      <p class="hint">You can select multiple files. The importer recognizes Arena evaluation exports containing conversation messages.</p>
+      <input id="files" type="file" accept=".zip,.json,application/zip,application/json" multiple>
+      <div class="hint">For Android: tap the file picker and choose the ZIP files from Downloads.</div>
+    </div>
+    <div class="actions">
+      <button id="import-btn" disabled>IMPORT SELECTED FILES</button>
+      <button id="reset-btn" class="secondary" type="button">RESET</button>
+    </div>
+    <p class="hint privacy"><strong>Privacy:</strong> files are processed in this browser. Conversation contents are not uploaded to Janus, Arena, or another server. The ZIP reader is loaded from jsDelivr only if you select a ZIP file. JSON-only imports work without that library.</p>
+  </section>
+  <section class="panel" aria-live="polite">
+    <h2>2. Import status</h2>
+    <div id="status">Waiting for files.</div>
+    <progress id="progress" max="100" value="0"></progress>
+    <div class="stats">
+      <div class="stat"><strong id="file-count">0</strong><span>Files read</span></div>
+      <div class="stat"><strong id="chat-count">0</strong><span>Unique conversations</span></div>
+      <div class="stat"><strong id="message-count">0</strong><span>Messages preserved</span></div>
+    </div>
+    <div id="warnings"></div>
+  </section>
+  <section class="panel">
+    <h2>3. Download your Janus archive</h2>
+    <p>The archive contains the untouched source files, a normalized JSON index, one readable Markdown file per conversation, and a master index. Duplicate conversation IDs are indexed once; all original source files remain included.</p>
+    <div class="actions">
+      <button id="download-btn" disabled>DOWNLOAD JANUS ARENA ARCHIVE (.ZIP)</button>
+      <button id="json-btn" class="secondary" disabled>DOWNLOAD MASTER JSON</button>
+    </div>
+    <details>
+      <summary>What is included?</summary>
+      <ul>
+        <li><code>originals/</code> — original JSON files and original ZIP files, unchanged.</li>
+        <li><code>janus-arena-archive.json</code> — normalized conversation records with original record data retained.</li>
+        <li><code>conversations/</code> — readable Markdown transcripts.</li>
+        <li><code>INDEX.md</code> — chronological conversation index.</li>
+        <li><code>manifest.json</code> — import counts, source filenames, duplicate counts, and warnings.</li>
+      </ul>
+    </details>
+  </section>
+  <section class="panel">
+    <h2>Conversation preview</h2>
+    <p class="hint">The preview shows detected conversations and their message counts. Full transcripts are in the downloaded archive.</p>
+    <ul id="conversation-list"><li>No conversations imported yet.</li></ul>
+  </section>
+</main>
+<script src="arena-importer.js" defer></script>
+</body>
+</html>
