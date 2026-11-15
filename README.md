@@ -119,6 +119,14 @@ JANUS_HARDWARE_ENABLED=false ./scripts/run-janus.sh
 ```
 ---
 
+## Import LM Arena / arena.ai conversations
+
+The browser-based archive importer is available at `http://localhost:5000/arena-importer.html` after starting JanusOS. It accepts Arena JSON exports and ZIP files containing JSON, works on Android-sized screens, and processes conversation contents locally in the browser. It preserves original source files and produces a normalized JSON archive plus readable Markdown transcripts.
+
+See [the Arena archive importer guide](docs/ARENA_ARCHIVE_IMPORTER.md) for the Android/Firefox workflow, privacy details, and file-size limits. ZIP handling loads JSZip from jsDelivr on demand; JSON-only imports do not need that dependency.
+
+---
+
 ## Development
 
 ```bash
