@@ -6,12 +6,52 @@
 use super::{Hat, KnowledgeRecord};
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashSet;
 use std::path::Path;
 
 /// Local durable store. A connection is intentionally owned by the caller;
 /// hosts should place it behind their own async/task boundary as appropriate.
 pub struct KnowledgeStore {
     connection: Connection,
+}
+
+/// Read boundary supplied by the host after authorization. This store enforces
+/// the scope; it does not authenticate users or authorize callers.
+#[derive(Debug, Clone)]
+pub struct KnowledgeAccessScope {
+    allowed_handling: HashSet<String>,
+    allowed_projects: HashSet<String>,
+    include_unscoped: bool,
+}
+
+impl KnowledgeAccessScope {
+    /// Default-safe scope: public/internal records not assigned to a project.
+    pub fn public_internal() -> Self {
+        Self {
+            allowed_handling: ["public".to_owned(), "internal".to_owned()].into_iter().collect(),
+            allowed_projects: HashSet::new(),
+            include_unscoped: true,
+        }
+    }
+
+    /// Call only after the host authorizes these handling classes and projects.
+    /// This is an enforcement input, not an authentication mechanism.
+    pub fn host_authorized(handling: &[&str], project_ids: &[&str], include_unscoped: bool) -> Self {
+        let allowed_handling = handling.iter()
+            .filter(|v| ["public", "internal", "private", "sensitive"].contains(v))
+            .map(|v| (*v).to_owned()).collect();
+        Self {
+            allowed_handling,
+            allowed_projects: project_ids.iter().map(|v| (*v).to_owned()).collect(),
+            include_unscoped,
+        }
+    }
+
+    fn allows(&self, record: &KnowledgeRecord) -> bool {
+        if !self.allowed_handling.contains(&record.handling) { return false; }
+        if record.project_ids.is_empty() { return self.include_unscoped; }
+        record.project_ids.iter().any(|id| self.allowed_projects.contains(id))
+    }
 }
 
 impl KnowledgeStore {
@@ -116,6 +156,10 @@ impl KnowledgeStore {
     /// Retrieve a record by stable ID. Superseded versions are hidden unless
     /// explicitly requested for audit or history views.
     pub fn get(&self, id: &str, include_superseded: bool) -> Result<Option<KnowledgeRecord>> {
+        self.get_with_scope(id, include_superseded, &KnowledgeAccessScope::public_internal())
+    }
+
+    pub fn get_with_scope(&self, id: &str, include_superseded: bool, scope: &KnowledgeAccessScope) -> Result<Option<KnowledgeRecord>> {
         let sql = if include_superseded {
             "SELECT record_json FROM aria_knowledge_records WHERE id = ?1"
         } else {
@@ -124,15 +168,19 @@ impl KnowledgeStore {
                  SELECT 1 FROM aria_knowledge_supersessions s WHERE s.old_record_id = r.id
              )"
         };
-        let json: Option<String> = self.connection.query_row(sql, [id], |row| row.get(0))
-            .optional()?;
-        json.map(|value| serde_json::from_str(&value).context("decoding stored knowledge record"))
-            .transpose()
+        let json: Option<String> = self.connection.query_row(sql, [id], |row| row.get(0)).optional()?;
+        let record = json.map(|value| serde_json::from_str::<KnowledgeRecord>(&value)
+            .context("decoding stored knowledge record")).transpose()?;
+        Ok(record.filter(|item| scope.allows(item)))
     }
 
     /// Search title and content using a literal, case-insensitive substring.
     /// Results are stable-sorted by most recently updated, then ID.
     pub fn search(&self, query: &str, hat: Option<Hat>, limit: usize) -> Result<Vec<KnowledgeRecord>> {
+        self.search_with_scope(query, hat, limit, &KnowledgeAccessScope::public_internal())
+    }
+
+    pub fn search_with_scope(&self, query: &str, hat: Option<Hat>, limit: usize, scope: &KnowledgeAccessScope) -> Result<Vec<KnowledgeRecord>> {
         if limit == 0 { return Ok(Vec::new()); }
         let needle = query.trim().to_lowercase();
         let mut statement = self.connection.prepare(
@@ -148,6 +196,7 @@ impl KnowledgeStore {
             let json = row?;
             let record: KnowledgeRecord = serde_json::from_str(&json)
                 .context("decoding knowledge record during search")?;
+            if !scope.allows(&record) { continue; }
             let text_matches = needle.is_empty()
                 || record.title.to_lowercase().contains(&needle)
                 || record.content.to_lowercase().contains(&needle)
@@ -210,10 +259,44 @@ mod tests {
             version: 1,
             supersedes: vec![],
             handling: "internal".into(),
-            project_ids: vec!["janus".into()],
+            project_ids: vec![],
             review_notes: None,
             expires_at: None,
         }
+    }
+
+
+    #[test]
+    fn default_scope_hides_private_and_project_records() {
+        let mut store = KnowledgeStore::in_memory().unwrap();
+        store.insert(&record("global", "Public note", "Visible", vec![Hat::White])).unwrap();
+        let mut private = record("private", "Private note", "Hidden", vec![Hat::White]);
+        private.handling = "private".into();
+        store.insert(&private).unwrap();
+        let mut project = record("project", "Janus note", "Project only", vec![Hat::Green]);
+        project.project_ids = vec!["janus".into()];
+        store.insert(&project).unwrap();
+        assert!(store.get("global", false).unwrap().is_some());
+        assert!(store.get("private", false).unwrap().is_none());
+        assert!(store.get("project", false).unwrap().is_none());
+        assert_eq!(store.search("", None, 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn host_scope_enforces_handling_and_project_boundaries() {
+        let mut store = KnowledgeStore::in_memory().unwrap();
+        let mut janus = record("janus-private", "Janus private", "Authorized", vec![Hat::Green]);
+        janus.handling = "private".into();
+        janus.project_ids = vec!["janus".into()];
+        store.insert(&janus).unwrap();
+        let mut vault = record("vault-private", "Vault private", "Not authorized", vec![Hat::Blue]);
+        vault.handling = "private".into();
+        vault.project_ids = vec!["omnivault".into()];
+        store.insert(&vault).unwrap();
+        let scope = KnowledgeAccessScope::host_authorized(&["private"], &["janus"], false);
+        assert!(store.get_with_scope("janus-private", false, &scope).unwrap().is_some());
+        assert!(store.get_with_scope("vault-private", false, &scope).unwrap().is_none());
+        assert_eq!(store.search_with_scope("", None, 10, &scope).unwrap().len(), 1);
     }
 
     #[test]
