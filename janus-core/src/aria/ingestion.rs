@@ -240,7 +240,7 @@ fn validate_input(input: &TextArtifactInput, bytes: &[u8], max: usize, overlap: 
 
 /// Split on Unicode scalar boundaries; locators are byte offsets into original UTF-8.
 pub fn chunk_text(id: &str, text: &str, max: usize, overlap: usize) -> Vec<TextChunk> {
-    if text.is_empty() || max==0 { return Vec::new(); }
+    if text.is_empty() || max==0 || overlap>=max { return Vec::new(); }
     let bounds: Vec<usize> = text.char_indices().map(|(i,_)|i)
         .chain(std::iter::once(text.len())).collect();
     let count=bounds.len()-1;
@@ -312,12 +312,12 @@ mod tests {
     fn expired_artifacts_are_hidden() {
         let mut store=AriaIngestionStore::in_memory().unwrap();
         let mut item=input("expired");
-        item.expires_at=Some(Utc::now()+chrono::Duration::seconds(1));
+        item.imported_at=Utc::now()-chrono::Duration::seconds(10);
+        item.expires_at=Some(Utc::now()-chrono::Duration::seconds(1));
         store.import_text(&item,b"short lived",20,0).unwrap();
         let scope=IngestionAccessScope::host_authorized(&["internal"],&["janus"],false);
-        assert!(store.original_bytes("expired",&scope).unwrap().is_some());
-        let expired=IngestionAccessScope { handling:scope.handling.clone(),
-            projects:scope.projects.clone(),include_unscoped:false };
-        assert!(store.manifest("expired",&expired).unwrap().is_some());
+        assert!(store.original_bytes("expired",&scope).unwrap().is_none());
+        assert!(store.manifest("expired",&scope).unwrap().is_none());
+        assert!(store.chunks("expired",&scope).unwrap().is_empty());
     }
 }
