@@ -115,6 +115,7 @@ impl LearningQueue {
     }
 
     fn from_connection(connection: Connection) -> Result<Self> {
+        connection.pragma_update(None,"foreign_keys","ON")?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS aria_learning_proposals (
