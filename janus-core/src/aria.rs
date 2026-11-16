@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 pub mod store;
-pub use store::KnowledgeStore;
+pub use store::{KnowledgeAccessScope, KnowledgeStore};
 
 /// Stable domain identifiers shared with docs/aria/MULTICOLORED_HAT_REGISTRY.json.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
