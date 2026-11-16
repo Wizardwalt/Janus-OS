@@ -279,10 +279,14 @@ mod tests {
         let key=[9u8;32];
         let mut store=EncryptedMemoryStore::in_memory(&key).unwrap();
         store.remember(&sample("secret-2","alice")).unwrap();
+        let (nonce,ciphertext):(Vec<u8>,Vec<u8>)=store.connection.query_row(
+            "SELECT nonce,ciphertext FROM aria_personal_memories_encrypted WHERE memory_id='secret-2'",
+            [],|row|Ok((row.get(0)?,row.get(1)?))
+        ).unwrap();
         let wrong=EncryptedMemoryStore {
             connection:Connection::open_in_memory().unwrap(),key:[3u8;32]
         };
-        assert!(wrong.decrypt("secret-2","alice",&[0u8;24],b"invalid").is_err());
+        assert!(wrong.decrypt("secret-2","alice",&nonce,&ciphertext).is_err());
         let corrected=store.correct("alice","secret-2","Updated private detail",&[],Utc::now()).unwrap();
         assert_eq!(corrected.version,2);
         assert_eq!(store.get("alice","secret-2",Utc::now()).unwrap().unwrap().content,"Updated private detail");
