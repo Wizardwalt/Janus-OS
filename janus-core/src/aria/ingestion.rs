@@ -410,4 +410,23 @@ mod tests {
     }
 
 
+    #[test]
+    fn broad_host_scope_cannot_read_unscoped_private_artifacts() {
+        let mut store=AriaIngestionStore::in_memory().unwrap();
+        let mut public=input("public-global");
+        public.handling="public".into();
+        public.project_ids.clear();
+        store.import_text(&public,b"shared text",100,0).unwrap();
+        let mut private=input("private-global");
+        private.handling="private".into();
+        private.project_ids.clear();
+        store.import_text(&private,b"private text",100,0).unwrap();
+        let scope=IngestionAccessScope::host_authorized(
+            &["public","internal","private"],&["owner:alice"],true
+        );
+        assert!(store.original_bytes("public-global",&scope).unwrap().is_some());
+        assert!(store.original_bytes("private-global",&scope).unwrap().is_none());
+    }
+
+
 }
