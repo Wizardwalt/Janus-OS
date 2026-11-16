@@ -441,8 +441,12 @@ async fn aria_search(
     let limit=query.limit.unwrap_or(20).clamp(1,50);
     let owner_project=format!("aria-owner:{}",account.id);
     let projects=[owner_project.as_str()];
-    let knowledge_scope=KnowledgeAccessScope::host_authorized(&["private"],&projects,false);
-    let artifact_scope=IngestionAccessScope::host_authorized(&["private"],&projects,false);
+    let knowledge_scope=KnowledgeAccessScope::host_authorized(
+        &["public","internal","private"],&projects,true
+    );
+    let artifact_scope=IngestionAccessScope::host_authorized(
+        &["public","internal","private"],&projects,true
+    );
     let result=match state.aria.lock() {
         Ok(stores)=>search_all(&stores.knowledge,&stores.ingestion,
             stores.memory.as_ref().map(|memory|memory as &dyn PersonalMemorySearch),
