@@ -36,6 +36,7 @@ impl EncryptedMemoryStore {
 
     fn from_connection(connection: Connection, key: &[u8; 32]) -> Result<Self> {
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        connection.pragma_update(None,"secure_delete","ON")?;
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS aria_personal_memories_encrypted (
                 memory_id TEXT PRIMARY KEY NOT NULL,
