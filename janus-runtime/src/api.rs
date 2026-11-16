@@ -14,7 +14,7 @@ use axum::{
     Router,
 };
 use janus_core::{
-    aria::{AriaIngestionStore, IngestionAccessScope, KnowledgeAccessScope, KnowledgeStore, LearningProposal, LearningQueue, MemoryStore, ReviewDecision, ReviewReceipt, TextArtifactInput, Hat, KnowledgeSourceType, search_all},
+    aria::{AriaIngestionStore, IngestionAccessScope, KnowledgeAccessScope, KnowledgeStore, LearningProposal, LearningQueue, EncryptedMemoryStore, PersonalMemory, PersonalMemorySearch, ReviewDecision, ReviewReceipt, TextArtifactInput, Hat, KnowledgeSourceType, search_all},
     AuditEntry, CertificationStatus, Config, EngagementScope, LicensedFeature, SignedLicense,
     StateKey, UserRole,
 };
