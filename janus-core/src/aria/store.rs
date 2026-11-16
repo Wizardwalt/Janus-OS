@@ -178,6 +178,17 @@ impl KnowledgeStore {
         Ok(record.filter(|item| scope.allows(item)))
     }
 
+    /// Internal idempotency lookup for durable learning outbox recovery.
+    /// Unlike user-facing reads, this includes expired and superseded records.
+    pub(crate) fn get_raw_for_persistence(&self, id: &str) -> Result<Option<KnowledgeRecord>> {
+        let json:Option<String>=self.connection.query_row(
+            "SELECT record_json FROM aria_knowledge_records WHERE id=?1",
+            [id],|row|row.get(0)
+        ).optional()?;
+        json.map(|value|serde_json::from_str::<KnowledgeRecord>(&value)
+            .context("decoding persisted knowledge record")).transpose()
+    }
+
     /// Search title and content using a literal, case-insensitive substring.
     /// Results are stable-sorted by most recently updated, then ID.
     pub fn search(&self, query: &str, hat: Option<Hat>, limit: usize) -> Result<Vec<KnowledgeRecord>> {
