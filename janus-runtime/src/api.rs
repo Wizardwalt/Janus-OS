@@ -457,6 +457,118 @@ async fn aria_search(
     }
 }
 
+
+async fn aria_memory_list(
+    AxumState(state):AxumState<ApiState>,headers:HeaderMap,
+)->(StatusCode,Json<ApiResponse<Vec<PersonalMemory>>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    match state.aria.lock() {
+        Ok(stores)=>match stores.memory.as_ref() {
+            Some(memory)=>match memory.list(&account.id,chrono::Utc::now(),100) {
+                Ok(items)=>(StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(items),error:None})),
+                Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
+            },
+            None=>(StatusCode::SERVICE_UNAVAILABLE,Json(ApiResponse {
+                status:"error".into(),data:None,error:Some("encrypted personal memory is disabled; configure JANUS_ARIA_MEMORY_KEY_FILE".into())
+            })),
+        },
+        Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
+        })),
+    }
+}
+
+async fn aria_memory_remember(
+    AxumState(state):AxumState<ApiState>,headers:HeaderMap,
+    Json(request):Json<AriaMemoryRequest>,
+)->(StatusCode,Json<ApiResponse<PersonalMemory>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    if request.content.trim().is_empty() || request.content.len()>64*1024
+        || request.source_refs.len()>32
+        || request.source_refs.iter().any(|source|source.len()>1000) {
+        return (StatusCode::BAD_REQUEST,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("memory content must be 1..=64 KiB and source references are limited to 32 entries of 1000 bytes".into())
+        }));
+    }
+    let now=chrono::Utc::now();
+    let memory=PersonalMemory {
+        memory_id:format!("memory:{}",uuid::Uuid::new_v4()),
+        owner_id:account.id,content:request.content,source_refs:request.source_refs,
+        created_at:now,updated_at:now,expires_at:request.expires_at,version:1,
+    };
+    match state.aria.lock() {
+        Ok(mut stores)=>match stores.memory.as_mut() {
+            Some(store)=>match store.remember(&memory) {
+                Ok(())=>(StatusCode::CREATED,Json(ApiResponse {status:"success".into(),data:Some(memory),error:None})),
+                Err(error)=>(StatusCode::BAD_REQUEST,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
+            },
+            None=>(StatusCode::SERVICE_UNAVAILABLE,Json(ApiResponse {
+                status:"error".into(),data:None,error:Some("encrypted personal memory is disabled; configure JANUS_ARIA_MEMORY_KEY_FILE".into())
+            })),
+        },
+        Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
+        })),
+    }
+}
+
+async fn aria_memory_correct(
+    AxumState(state):AxumState<ApiState>,headers:HeaderMap,Path(memory_id):Path<String>,
+    Json(request):Json<AriaMemoryRequest>,
+)->(StatusCode,Json<ApiResponse<PersonalMemory>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    if request.content.trim().is_empty() || request.content.len()>64*1024
+        || request.source_refs.len()>32
+        || request.source_refs.iter().any(|source|source.len()>1000) {
+        return (StatusCode::BAD_REQUEST,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("memory content and source references exceed supported limits".into())
+        }));
+    }
+    match state.aria.lock() {
+        Ok(mut stores)=>match stores.memory.as_mut() {
+            Some(store)=>match store.correct(&account.id,&memory_id,&request.content,
+                &request.source_refs,chrono::Utc::now()) {
+                Ok(memory)=>(StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(memory),error:None})),
+                Err(error)=>(StatusCode::NOT_FOUND,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
+            },
+            None=>(StatusCode::SERVICE_UNAVAILABLE,Json(ApiResponse {
+                status:"error".into(),data:None,error:Some("encrypted personal memory is disabled; configure JANUS_ARIA_MEMORY_KEY_FILE".into())
+            })),
+        },
+        Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
+        })),
+    }
+}
+
+async fn aria_memory_forget(
+    AxumState(state):AxumState<ApiState>,headers:HeaderMap,Path(memory_id):Path<String>,
+)->(StatusCode,Json<ApiResponse<bool>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    match state.aria.lock() {
+        Ok(mut stores)=>match stores.memory.as_mut() {
+            Some(store)=>match store.forget(&account.id,&memory_id,chrono::Utc::now()) {
+                Ok(forgotten)=>(StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(forgotten),error:None})),
+                Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
+            },
+            None=>(StatusCode::SERVICE_UNAVAILABLE,Json(ApiResponse {
+                status:"error".into(),data:None,error:Some("encrypted personal memory is disabled; configure JANUS_ARIA_MEMORY_KEY_FILE".into())
+            })),
+        },
+        Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
+        })),
+    }
+}
+
 async fn aria_propose(
     AxumState(state):AxumState<ApiState>,headers:HeaderMap,
     Json(request):Json<AriaProposalRequest>,
