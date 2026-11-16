@@ -15,6 +15,16 @@
 
 This is a preservation and text-indexing layer, not a PDF/DOCX/HTML parser. Format-specific extraction adapters are still required. Binary originals can be preserved by a future binary artifact API; this initial text API deliberately rejects invalid UTF-8 rather than corrupting it.
 
+
+## Implemented extraction and source-cited retrieval
+
+- `extract_plain_text` validates UTF-8 and preserves text exactly.
+- `extract_simple_html` provides conservative extraction for simple exported HTML: strips tags, skips script/style bodies, decodes common/numeric entities, and returns normalized text. It is explicitly not a complete HTML5 parser or a sanitizer.
+- `AriaIngestionStore::search_chunks` searches extracted chunks within a supplied access scope and returns source passages with artifact ID, SHA-256, title, ordinal, and exact byte offsets.
+- `LearningProposal::from_passage` converts a retrieved passage into an unverified, source-linked proposal without dropping the original artifact hash or locator. The proposal then enters the existing human review queue.
+
+This closes the basic text → preserve → chunk → retrieve with citation → propose → human review library path. The caller still chooses the initial hat labels and source type; this is not automatic AI classification.
+
 ## Implemented human-review learning queue
 
 `janus_core::aria::learning` provides a durable proposal and review queue:
@@ -57,10 +67,10 @@ The owner ID is an authorization input supplied by the host, not proof of identi
 
 The following are not claimed as implemented:
 
-- PDF, DOCX, HTML, image/OCR, and archive extraction adapters;
+- standards-complete PDF and DOCX parsers, full HTML5 parsing, image/OCR, and archive extraction adapters; the current HTML helper is deliberately conservative;
 - an end-to-end authenticated host/API that connects artifact ingestion, proposal review, and knowledge persistence atomically;
 - private per-user conversation events and explicit long-term memory controls;
-- retrieval that combines artifact chunks, reviewed knowledge, and approved conversation context with citations;
+- unified retrieval across artifact chunks, reviewed knowledge, and approved conversation context (artifact chunk search now returns source-cited passages);
 - automatic Multicolored Hat suggestions with confidence and human correction;
 - contradiction detection, re-review scheduling, retention/deletion workflows, and learning evaluation;
 - OmniVault read-only connector and user consent UI;
