@@ -276,9 +276,20 @@ fn validate_input(input: &TextArtifactInput, bytes: &[u8], max: usize, overlap: 
     if !matches!(input.handling.as_str(),"public"|"internal"|"private"|"sensitive") {
         return Err(anyhow!("invalid handling classification"));
     }
+    if input.artifact_id.len()>200 || input.title.len()>500
+        || input.media_type.len()>200 || input.source_type.len()>100 {
+        return Err(anyhow!("artifact metadata exceeds supported length limits"));
+    }
+    if input.project_ids.iter().any(|id|id.trim().is_empty() || id.len()>160) {
+        return Err(anyhow!("project IDs must be non-empty and at most 160 bytes"));
+    }
     let unique: HashSet<_> = input.project_ids.iter().collect();
     if unique.len()!=input.project_ids.len() { return Err(anyhow!("duplicate project IDs")); }
     if bytes.is_empty() { return Err(anyhow!("source artifact must not be empty")); }
+    const MAX_ARTIFACT_BYTES:usize=32*1024*1024;
+    if bytes.len()>MAX_ARTIFACT_BYTES {
+        return Err(anyhow!("text artifact exceeds the 32 MiB ingestion limit"));
+    }
     if max==0 || overlap>=max { return Err(anyhow!("require max_chars > overlap_chars and max_chars > 0")); }
     if input.expires_at.is_some_and(|v| v<=input.imported_at) {
         return Err(anyhow!("expires_at must be later than imported_at"));
@@ -382,6 +393,18 @@ mod tests {
         }
         let denied=IngestionAccessScope::host_authorized(&["private"],&["janus"],false);
         assert!(store.search_chunks("Ohm's",&denied,5).unwrap().is_empty());
+    }
+
+
+    #[test]
+    fn rejects_blank_project_scope_and_oversized_artifact() {
+        let mut store=AriaIngestionStore::in_memory().unwrap();
+        let mut item=input("bad-project");
+        item.project_ids=vec![" ".into()];
+        assert!(store.import_text(&item,b"text",10,0).is_err());
+        let item=input("too-large");
+        let bytes=vec![b'x';32*1024*1024+1];
+        assert!(store.import_text(&item,&bytes,10,0).is_err());
     }
 
 
