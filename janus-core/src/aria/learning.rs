@@ -100,7 +100,7 @@ impl LearningQueue {
         }
         proposal.record.validate().map_err(|e| anyhow!("invalid proposed record: {e}"))?;
         let linked = proposal.record.sources.iter().any(|source| {
-            source.artifact_id.as_deref() == Some(&proposal.source.artifact_id)
+            source.artifact_id.as_deref() == Some(proposal.source.artifact_id.as_str())
                 && source.sha256.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(&proposal.source.sha256))
         });
         if !linked {
