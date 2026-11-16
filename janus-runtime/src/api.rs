@@ -5,7 +5,7 @@ use crate::{
     hardware::{HardwareAdapterStatus, HardwareManager},
     state::StateManager,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     extract::{Path, Query, State as AxumState},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
