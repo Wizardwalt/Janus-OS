@@ -470,7 +470,13 @@ async fn aria_pending(
     }
     match state.aria.lock() {
         Ok(stores)=>match stores.learning.pending(100) {
-            Ok(items)=>(StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(items),error:None})),
+            Ok(items)=>{
+                let owner_project=format!("aria-owner:{}",account.id);
+                let visible:Vec<_>=items.into_iter()
+                    .filter(|item|item.record.project_ids.contains(&owner_project))
+                    .collect();
+                (StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(visible),error:None}))
+            },
             Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
         },
         Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())})),
@@ -495,13 +501,31 @@ async fn aria_review(
             status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
         })),
     };
+    let owner_project=format!("aria-owner:{}",account.id);
+    let proposal=match stores.learning.get_proposal(&proposal_id) {
+        Ok(Some(proposal))=>proposal,
+        Ok(None)=>return (StatusCode::NOT_FOUND,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("learning proposal not found".into())
+        })),
+        Err(error)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some(error.to_string())
+        })),
+    };
+    if !proposal.record.project_ids.contains(&owner_project) {
+        return (StatusCode::NOT_FOUND,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("learning proposal not found".into())
+        }));
+    }
     let receipt=ReviewReceipt {
         proposal_id,decision:request.decision,reviewer_id:account.id,
         reviewed_at:chrono::Utc::now(),notes:request.notes,
     };
     match stores.learning.review(&receipt) {
         Ok(record)=>{
-            let persisted=match stores.learning.persist_pending(&mut stores.knowledge,100) {
+            let persisted=match {
+                let AriaRuntimeStores { learning, knowledge, .. } = &mut *stores;
+                learning.persist_pending(knowledge,100)
+            } {
                 Ok(count)=>count,
                 Err(error)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
                     status:"error".into(),data:None,error:Some(format!("review receipt is durable; accepted record remains in recovery outbox: {error}"))
@@ -538,7 +562,11 @@ async fn aria_persist_pending(
             status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
         })),
     };
-    match stores.learning.persist_pending(&mut stores.knowledge,100) {
+    let persisted_result={
+        let AriaRuntimeStores { learning, knowledge, .. } = &mut *stores;
+        learning.persist_pending(knowledge,100)
+    };
+    match persisted_result {
         Ok(count)=>(StatusCode::OK,Json(ApiResponse {
             status:"success".into(),data:Some(serde_json::json!({
                 "persisted_count":count,
