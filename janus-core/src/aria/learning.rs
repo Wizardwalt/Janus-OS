@@ -196,6 +196,17 @@ impl LearningQueue {
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
 
+    /// Return pending proposals assigned to one exact project scope.
+    /// Filtering is performed before the limit so other owners cannot starve
+    /// this project's review queue.
+    pub fn pending_for_project(&self, project_id: &str, limit: usize) -> Result<Vec<LearningProposal>> {
+        if project_id.trim().is_empty() || limit==0 { return Ok(Vec::new()); }
+        let pending=self.pending(usize::MAX)?;
+        Ok(pending.into_iter()
+            .filter(|proposal|proposal.record.project_ids.iter().any(|id|id==project_id))
+            .take(limit).collect())
+    }
+
     /// Record one immutable human decision. The returned record is Reviewed,
     /// never Verified; callers persist it in KnowledgeStore after authorization.
     pub fn review(&mut self, receipt: &ReviewReceipt) -> Result<Option<KnowledgeRecord>> {
