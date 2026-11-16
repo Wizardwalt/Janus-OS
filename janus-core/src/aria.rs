@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 pub mod ingestion;
+pub mod learning;
 pub mod store;
 pub use ingestion::{ArtifactManifest, AriaIngestionStore, IngestionAccessScope, TextArtifactInput, TextChunk};
+pub use learning::{LearningProposal, LearningQueue, ReviewDecision, ReviewReceipt, SourceLocator};
 pub use store::{KnowledgeAccessScope, KnowledgeStore};
 
 /// Stable domain identifiers shared with docs/aria/MULTICOLORED_HAT_REGISTRY.json.
