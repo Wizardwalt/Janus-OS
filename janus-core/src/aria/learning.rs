@@ -299,4 +299,27 @@ mod tests {
         assert!(queue.review(&receipt).unwrap().is_none());
         assert_eq!(queue.receipt("p2").unwrap().unwrap().decision,ReviewDecision::Rejected);
     }
+    #[test]
+    fn retrieved_passage_can_become_a_source_linked_learning_proposal() {
+        let now=Utc::now();
+        let passage=SourcePassage {
+            artifact_id:"manual-1".into(),title:"Electronics Manual".into(),
+            sha256:"c".repeat(64),start_byte:12,end_byte:48,ordinal:2,
+            text:"Voltage equals current times resistance.".into(),
+        };
+        let proposal=LearningProposal::from_passage(
+            "from-search","Ohm's law",&passage,KnowledgeSourceType::File,
+            vec![Hat::Red,Hat::White],vec!["electronics".into()],
+            "internal",vec!["janus".into()],now,
+        );
+        assert_eq!(proposal.record.epistemic_status,EpistemicStatus::Unverified);
+        assert_eq!(proposal.source.start_byte,12);
+        assert_eq!(proposal.record.sources[0].artifact_id.as_deref(),Some("manual-1"));
+        assert_eq!(proposal.record.sources[0].sha256.as_deref(),Some("c".repeat(64).as_str()));
+        let mut queue=LearningQueue::in_memory().unwrap();
+        queue.propose(&proposal).unwrap();
+        assert_eq!(queue.pending(5).unwrap().len(),1);
+    }
+
+
 }
