@@ -144,6 +144,13 @@ impl MemoryStore {
         if !exists { return Ok(false); }
         tx.execute("DELETE FROM aria_personal_memories WHERE memory_id=?1 AND owner_id=?2",
             params![memory_id,owner_id])?;
+        // Remove historical content digests too: low-entropy private content
+        // can sometimes be guessed from a hash. Keep only event metadata.
+        tx.execute(
+            "UPDATE aria_memory_audit SET prior_content_sha256=NULL
+             WHERE memory_id=?1 AND owner_id=?2",
+            params![memory_id,owner_id],
+        )?;
         audit(&tx,memory_id,owner_id,"forgotten",at,None)?;
         tx.commit()?;
         Ok(true)
@@ -274,6 +281,7 @@ mod tests {
     fn forgetting_removes_content_but_keeps_minimal_audit() {
         let mut store=MemoryStore::in_memory().unwrap();
         store.remember(&memory("m1","alice")).unwrap();
+        store.correct("alice","m1","Corrected private detail",&[],Utc::now()).unwrap();
         assert!(store.forget("alice","m1",Utc::now()).unwrap());
         assert!(store.get("alice","m1",Utc::now()).unwrap().is_none());
         let events=store.audit_events("alice","m1").unwrap();
