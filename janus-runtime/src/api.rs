@@ -469,15 +469,12 @@ async fn aria_pending(
         }));
     }
     match state.aria.lock() {
-        Ok(stores)=>match stores.learning.pending(100) {
-            Ok(items)=>{
-                let owner_project=format!("aria-owner:{}",account.id);
-                let visible:Vec<_>=items.into_iter()
-                    .filter(|item|item.record.project_ids.contains(&owner_project))
-                    .collect();
-                (StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(visible),error:None}))
-            },
-            Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
+        Ok(stores)=>{
+            let owner_project=format!("aria-owner:{}",account.id);
+            match stores.learning.pending_for_project(&owner_project,100) {
+                Ok(items)=>(StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(items),error:None})),
+                Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
+            }
         },
         Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())})),
     }
