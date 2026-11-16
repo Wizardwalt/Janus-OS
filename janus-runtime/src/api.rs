@@ -521,14 +521,14 @@ async fn aria_review(
         Ok(record)=>{
             let persisted=match {
                 let AriaRuntimeStores { learning, knowledge, .. } = &mut *stores;
-                learning.persist_pending(knowledge,100)
+                learning.persist_pending_for_project(knowledge,&org_project,100)
             } {
                 Ok(count)=>count,
                 Err(error)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
                     status:"error".into(),data:None,error:Some(format!("review receipt is durable; accepted record remains in recovery outbox: {error}"))
                 })),
             };
-            let pending=stores.learning.pending_persistence(100).unwrap_or(0);
+            let pending=stores.learning.pending_persistence_for_project(&org_project,100).unwrap_or(0);
             (StatusCode::OK,Json(ApiResponse {
                 status:"success".into(),data:Some(serde_json::json!({
                     "receipt":receipt,"accepted_record":record,"persisted_count":persisted,
@@ -559,6 +559,7 @@ async fn aria_persist_pending(
             status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
         })),
     };
+    let org_project=format!("aria-org:{}",account.organization_id);
     let persisted_result={
         let AriaRuntimeStores { learning, knowledge, .. } = &mut *stores;
         learning.persist_pending(knowledge,100)
