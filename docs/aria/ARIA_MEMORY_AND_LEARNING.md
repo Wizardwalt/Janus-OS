@@ -68,6 +68,17 @@ The owner ID is an authorization input supplied by the host, not proof of identi
 
 The Janus Runtime now uses this encrypted store for its memory API only when `JANUS_ARIA_MEMORY_KEY_FILE` points to a regular, non-symlink file containing exactly 64 hexadecimal characters (32 key bytes). On Unix, the key file must have owner-only permissions (0600). The key is never written to the database. If no key file is configured, memory endpoints return service unavailable and unified retrieval simply omits personal memories. The host remains responsible for secure key generation, backup, access control, rotation, and recovery; do not place the key beside the database or in source control.
 
+For a local Unix development host, a key file can be created with:
+
+```sh
+umask 077
+openssl rand -hex 32 > /secure/path/janus-aria-memory.key
+chmod 600 /secure/path/janus-aria-memory.key
+export JANUS_ARIA_MEMORY_KEY_FILE=/secure/path/janus-aria-memory.key
+```
+
+Keep the key in a protected secret store or separate protected backup. Losing it makes encrypted personal memories unrecoverable; copying it into the database backup defeats the separation.
+
 Authenticated, explicit user-action endpoints are available: `POST /aria/memory` (remember), `GET /aria/memory` (list), `POST /aria/memory/{id}/correct`, and `DELETE /aria/memory/{id}` (forget). No conversation is automatically converted into a personal memory.
 
 ## Authenticated Janus Runtime API integration
