@@ -201,10 +201,21 @@ impl LearningQueue {
     /// this project's review queue.
     pub fn pending_for_project(&self, project_id: &str, limit: usize) -> Result<Vec<LearningProposal>> {
         if project_id.trim().is_empty() || limit==0 { return Ok(Vec::new()); }
-        let pending=self.pending(usize::MAX)?;
-        Ok(pending.into_iter()
-            .filter(|proposal|proposal.record.project_ids.iter().any(|id|id==project_id))
-            .take(limit).collect())
+        let mut statement=self.connection.prepare(
+            "SELECT p.proposal_json FROM aria_learning_proposals p
+             LEFT JOIN aria_learning_reviews r ON r.proposal_id=p.proposal_id
+             WHERE r.proposal_id IS NULL ORDER BY p.proposed_at ASC,p.proposal_id ASC"
+        )?;
+        let rows=statement.query_map([],|row|row.get::<_,String>(0))?;
+        let mut result=Vec::new();
+        for row in rows {
+            let proposal:LearningProposal=serde_json::from_str(&row?)?;
+            if proposal.record.project_ids.iter().any(|id|id==project_id) {
+                result.push(proposal);
+                if result.len()>=limit { break; }
+            }
+        }
+        Ok(result)
     }
 
     /// Record one immutable human decision. The returned record is Reviewed,
