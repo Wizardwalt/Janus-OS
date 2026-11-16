@@ -62,7 +62,13 @@ The queue is a library component, not an authenticated API. Hosts must enforce u
 - Expired memories are hidden from reads and lists and cannot be corrected.
 - Unit tests cover owner isolation, correction history, forget behavior, expiry, and search beyond the most recently updated unmatched memories.
 
-The owner ID is an authorization input supplied by the host, not proof of identity. The host must authenticate the user before calling the store. This library component is not yet connected to the ARIA chat API or user interface. SQLite contents are not encrypted by this component; production hosts must provide OS/database encryption and protected key management before storing sensitive personal memories.
+The owner ID is an authorization input supplied by the host, not proof of identity. The host must authenticate the user before calling the store. The original `MemoryStore` is a plaintext development/test component and must not be used for sensitive production memories.
+
+`janus_core::aria::EncryptedMemoryStore` is now available. It encrypts the complete serialized memory (content and source references) with XChaCha20-Poly1305 using a fresh 192-bit nonce for every write. Owner ID and indexing metadata remain visible to SQLite; authenticated decryption verifies that the encrypted record's owner and memory IDs match those index fields. Wrong keys and modified ciphertext fail authentication. Correction uses optimistic version checks; forget deletes the encrypted row and clears historical content digests from its audit trail.
+
+The Janus Runtime now uses this encrypted store for its memory API only when `JANUS_ARIA_MEMORY_KEY_FILE` points to a regular, non-symlink file containing exactly 64 hexadecimal characters (32 key bytes). On Unix, the key file must have owner-only permissions (0600). The key is never written to the database. If no key file is configured, memory endpoints return service unavailable and unified retrieval simply omits personal memories. The host remains responsible for secure key generation, backup, access control, rotation, and recovery; do not place the key beside the database or in source control.
+
+Authenticated, explicit user-action endpoints are available: `POST /aria/memory` (remember), `GET /aria/memory` (list), `POST /aria/memory/{id}/correct`, and `DELETE /aria/memory/{id}` (forget). No conversation is automatically converted into a personal memory.
 
 ## Authenticated Janus Runtime API integration
 
