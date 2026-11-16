@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 pub mod classification;
+pub mod encrypted_memory;
 pub mod extraction;
 pub mod ingestion;
 pub mod learning;
@@ -16,6 +17,7 @@ pub mod omnivault;
 pub mod retrieval;
 pub mod store;
 pub use classification::{suggest_hats, HatSuggestion};
+pub use encrypted_memory::EncryptedMemoryStore;
 pub use extraction::{extract_plain_text, extract_simple_html, ExtractedText};
 pub use ingestion::{ArtifactManifest, AriaIngestionStore, IngestionAccessScope, TextArtifactInput, TextChunk, SourcePassage};
 pub use learning::{LearningProposal, LearningQueue, ReviewDecision, ReviewReceipt, SourceLocator};
