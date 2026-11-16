@@ -129,6 +129,11 @@ impl LearningQueue {
                 reviewed_at TEXT NOT NULL,
                 notes TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS aria_learning_outbox (
+                proposal_id TEXT PRIMARY KEY NOT NULL REFERENCES aria_learning_proposals(proposal_id),
+                record_json TEXT NOT NULL,
+                persisted_at TEXT
+            );
             CREATE INDEX IF NOT EXISTS idx_aria_learning_proposals_time
                 ON aria_learning_proposals(proposed_at DESC);"
         ).context("initializing Aria learning review queue")?;
@@ -206,13 +211,71 @@ impl LearningQueue {
             params![receipt.proposal_id,decision,receipt.reviewer_id,
                 receipt.reviewed_at.to_rfc3339(),receipt.notes],
         ).context("recording immutable learning review")?;
-        tx.commit()?;
-        if receipt.decision == ReviewDecision::Rejected { return Ok(None); }
+        if receipt.decision == ReviewDecision::Rejected {
+            tx.commit()?;
+            return Ok(None);
+        }
         let mut record = proposal.record;
         record.epistemic_status = EpistemicStatus::Reviewed;
         record.review_notes = Some(format!("Accepted by {}: {}",receipt.reviewer_id,receipt.notes));
         record.updated_at = receipt.reviewed_at.max(record.created_at);
+        let record_json = serde_json::to_string(&record)?;
+        tx.execute(
+            "INSERT INTO aria_learning_outbox(proposal_id,record_json,persisted_at)
+             VALUES (?1,?2,NULL)",
+            params![receipt.proposal_id,record_json],
+        ).context("queuing accepted knowledge for durable persistence")?;
+        tx.commit()?;
         Ok(Some(record))
+    }
+
+    /// Persist accepted records from the durable outbox into KnowledgeStore.
+    ///
+    /// The stores may use separate SQLite databases, so this is a recoverable
+    /// at-least-once hand-off rather than a cross-database transaction. If the
+    /// process crashes after knowledge insertion but before marking the outbox
+    /// row complete, an identical existing record is recognized on retry.
+    pub fn persist_pending(&mut self, knowledge: &mut super::KnowledgeStore, limit: usize) -> Result<usize> {
+        if limit == 0 { return Ok(0); }
+        let rows: Vec<(String,String)> = {
+            let mut statement = self.connection.prepare(
+                "SELECT proposal_id,record_json FROM aria_learning_outbox
+                 WHERE persisted_at IS NULL ORDER BY proposal_id LIMIT ?1"
+            )?;
+            let mapped = statement.query_map([i64::try_from(limit)?], |row| {
+                Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?))
+            })?;
+            mapped.collect::<std::result::Result<Vec<_>,_>>()?
+        };
+        let mut completed=0usize;
+        for (proposal_id,json) in rows {
+            let record: KnowledgeRecord = serde_json::from_str(&json)
+                .context("decoding accepted learning outbox record")?;
+            let handling=[record.handling.as_str()];
+            let projects:Vec<&str>=record.project_ids.iter().map(String::as_str).collect();
+            let scope=super::KnowledgeAccessScope::host_authorized(&handling,&projects,false);
+            match knowledge.get_with_scope(&record.id,true,&scope)? {
+                Some(existing) if existing == record => {},
+                Some(_) => return Err(anyhow!("knowledge record {} exists with different content",record.id)),
+                None => knowledge.insert(&record)
+                    .with_context(||format!("persisting accepted learning proposal {proposal_id}"))?,
+            }
+            self.connection.execute(
+                "UPDATE aria_learning_outbox SET persisted_at=?1
+                 WHERE proposal_id=?2 AND persisted_at IS NULL",
+                params![Utc::now().to_rfc3339(),proposal_id],
+            ).context("marking accepted learning record persisted")?;
+            completed+=1;
+        }
+        Ok(completed)
+    }
+
+    pub fn pending_persistence(&self, limit: usize) -> Result<usize> {
+        let count:i64=self.connection.query_row(
+            "SELECT COUNT(*) FROM aria_learning_outbox WHERE persisted_at IS NULL",
+            [],|row|row.get(0)
+        )?;
+        Ok(usize::try_from(count)?.min(limit))
     }
 
     pub fn receipt(&self, proposal_id: &str) -> Result<Option<ReviewReceipt>> {
