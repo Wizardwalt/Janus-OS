@@ -36,6 +36,17 @@ pub struct ArtifactManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourcePassage {
+    pub artifact_id: String,
+    pub title: String,
+    pub sha256: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub ordinal: usize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextChunk {
     pub artifact_id: String,
     pub ordinal: usize,
@@ -215,6 +226,41 @@ impl AriaIngestionStore {
                 start_byte:usize::try_from(start)?, end_byte:usize::try_from(end)?, text })
         }).collect()
     }
+    /// Search extracted chunks without losing their exact source locators.
+    /// Access checks are applied before any matching passage is returned.
+    pub fn search_chunks(
+        &self, query: &str, scope: &IngestionAccessScope, limit: usize,
+    ) -> Result<Vec<SourcePassage>> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() || limit == 0 { return Ok(Vec::new()); }
+        let mut statement = self.connection.prepare(
+            "SELECT a.artifact_id,a.title,a.sha256,a.handling,a.project_ids_json,
+                    a.expires_at,c.start_byte,c.end_byte,c.chunk_text,c.ordinal
+             FROM aria_source_artifacts a
+             JOIN aria_source_chunks c ON c.artifact_id=a.artifact_id
+             ORDER BY a.imported_at DESC,a.artifact_id ASC,c.ordinal ASC"
+        )?;
+        let rows = statement.query_map([], |row| Ok((
+            row.get::<_,String>(0)?, row.get::<_,String>(1)?, row.get::<_,String>(2)?,
+            row.get::<_,String>(3)?, row.get::<_,String>(4)?, row.get::<_,Option<String>>(5)?,
+            row.get::<_,i64>(6)?, row.get::<_,i64>(7)?, row.get::<_,String>(8)?,
+            row.get::<_,i64>(9)?
+        )))?;
+        let mut passages = Vec::new();
+        for row in rows {
+            let (artifact_id,title,sha256,handling,projects,expiry,start,end,text,ordinal) = row?;
+            let projects: Vec<String> = serde_json::from_str(&projects)?;
+            if !scope.allows(&handling,&projects,parse_expiry(expiry)?) { continue; }
+            if !text.to_lowercase().contains(&needle) { continue; }
+            passages.push(SourcePassage {
+                artifact_id,title,sha256,start_byte:usize::try_from(start)?,
+                end_byte:usize::try_from(end)?,ordinal:usize::try_from(ordinal)?,text,
+            });
+            if passages.len() >= limit { break; }
+        }
+        Ok(passages)
+    }
+
 }
 
 fn parse_expiry(value: Option<String>) -> Result<Option<DateTime<Utc>>> {
@@ -322,4 +368,21 @@ mod tests {
         assert!(store.manifest("expired",&scope).unwrap().is_none());
         assert!(store.chunks("expired",&scope).unwrap().is_empty());
     }
+    #[test]
+    fn chunk_search_returns_citable_source_ranges_and_respects_scope() {
+        let mut store=AriaIngestionStore::in_memory().unwrap();
+        store.import_text(&input("manual-a"),b"Ohm's law relates voltage and current.",12,2).unwrap();
+        let allowed=IngestionAccessScope::host_authorized(&["internal"],&["janus"],false);
+        let hits=store.search_chunks("voltage",&allowed,5).unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|hit|hit.artifact_id=="manual-a" && hit.sha256.len()==64));
+        for hit in hits {
+            let original=store.original_bytes("manual-a",&allowed).unwrap().unwrap();
+            assert_eq!(&String::from_utf8(original).unwrap()[hit.start_byte..hit.end_byte],hit.text);
+        }
+        let denied=IngestionAccessScope::host_authorized(&["private"],&["janus"],false);
+        assert!(store.search_chunks("voltage",&denied,5).unwrap().is_empty());
+    }
+
+
 }
