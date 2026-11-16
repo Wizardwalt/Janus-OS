@@ -63,7 +63,7 @@ Implemented first slices:
 - Immutable accept/reject review receipts with reviewer identity, timestamp and notes.
 - A separate explicit personal-memory store in `janus-core/src/aria/memory.rs`, with owner-scoped reads/writes, corrections, expiry and forget behavior. Forget removes content and historical content digests while retaining minimal audit metadata.
 
-Stage 2 is **not complete**. Standards-complete PDF/DOCX/HTML5 extraction, OCR, authenticated host integration, atomic review-to-knowledge persistence, automatic hat suggestions, unified retrieval across all memory classes, evaluation, host-managed encryption, retention/deletion workflows and OmniVault integration remain to be implemented. The current HTML helper handles only simple exported pages and is not a full HTML5 parser. The queue is a library component, not an authenticated review API; the host must authorize users and persist accepted records safely.
+Stage 2 is **not complete**. Standards-complete PDF/DOCX/HTML5 extraction, OCR, authenticated host integration, atomic review-to-knowledge persistence, automatic hat suggestions, unified retrieval across all memory classes, evaluation, host-managed encryption, retention/deletion workflows and the live authenticated OmniVault-to-Janus bridge remain to be implemented. The current OmniVault Android gateway is in-process only; the Rust snapshot importer is a contract, not a live cross-app connection. The current HTML helper handles only simple exported pages and is not a full HTML5 parser. The queue is a library component, not an authenticated review API; the host must authorize users and persist accepted records safely.
 
 See [Memory and Learning System](ARIA_MEMORY_AND_LEARNING.md) for the implementation contract and remaining exit criteria.
 
@@ -84,6 +84,7 @@ The Rust foundation lives in:
 - `janus-core/src/aria/ingestion.rs`
 - `janus-core/src/aria/learning.rs`
 - `janus-core/src/aria/memory.rs`
+- `janus-core/src/aria/omnivault.rs`
 
 From the repository root, run the workspace checks:
 
