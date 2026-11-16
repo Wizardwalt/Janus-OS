@@ -138,4 +138,18 @@ mod tests {
             item.source_json.as_bytes()
         );
     }
+    #[test]
+    fn accepts_lm_arena_evaluation_wrapped_source_json() {
+        let mut store=AriaIngestionStore::in_memory().unwrap();
+        let mut item=snapshot();
+        item.source_json=r#"{"evaluation":{"id":"conv-123","messages":[{"role":"user","content":"How do I test a diode?"}]}}"#.into();
+        let approval=OmniVaultReadApproval {
+            owner_id:"owner-1".into(),
+            approved_conversation_ids:vec!["conv-123".to_owned()].into_iter().collect(),
+            approved_at:Utc::now(),
+        };
+        assert!(import_approved_snapshot(&mut store,&approval,&item,Utc::now(),100,10).is_ok());
+    }
+
+
 }
