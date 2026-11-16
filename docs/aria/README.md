@@ -52,7 +52,7 @@ Implemented in this repository:
 
 Stage 1 is the foundation, not a claim that every future capability already exists. Aria does not yet have a connected live model provider, autonomous learning pipeline, document-ingestion service, semantic/vector retrieval, voice interface, or production tool gateway. The host application must authenticate users and authorize any broader access scope; the knowledge store enforces a scope but is not an identity provider.
 
-## Architecture documents
+## Stage 2 — Memory and learning (first implementation slice)\n\nThe first ingestion slice is now implemented in `janus-core/src/aria/ingestion.rs`:\n\n- Retains the exact original UTF-8 text bytes in SQLite and records a SHA-256 fingerprint.\n- Rejects duplicate artifact IDs; source originals are never overwritten.\n- Creates deterministic, overlapping text chunks with byte offsets into the original.\n- Applies host-supplied handling/project scopes and expiry checks to manifests, originals, and chunks.\n- Uses a transaction so an artifact and its derived chunks are committed together.\n\nThis is not yet a complete autonomous learning system. PDF/DOCX/HTML/image/audio extraction, automatic classification, reviewed knowledge-record creation, semantic retrieval, personal-memory lifecycle controls, model integration, and background learning jobs remain future slices. Only UTF-8 text is accepted at this stage; binary formats must go through explicit extractors.\n\n## Architecture documents
 
 - [Aria Constitution](ARIA_CONSTITUTION.md) — identity, principles, memory boundaries and host responsibilities.
 - [Multicolored Hat Registry](MULTICOLORED_HAT_REGISTRY.json) — stable domain IDs, descriptions and routing rules.
@@ -64,7 +64,7 @@ Stage 1 is the foundation, not a claim that every future capability already exis
 The Rust foundation lives in:
 
 - `janus-core/src/aria.rs`
-- `janus-core/src/aria/store.rs`
+- `janus-core/src/aria/store.rs`\n- `janus-core/src/aria/ingestion.rs`
 
 From the repository root, run the workspace checks:
 
