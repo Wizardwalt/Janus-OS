@@ -19,3 +19,4 @@ rusqlite.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 machine-uid.workspace = true
+sha2.workspace = true
