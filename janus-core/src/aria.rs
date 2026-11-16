@@ -161,9 +161,15 @@ impl KnowledgeRecord {
         }
         let unique_tags: HashSet<_> = self.tags.iter().collect();
         if unique_tags.len() != self.tags.len() { return Err("tags must not contain duplicates".into()); }
+        if self.project_ids.iter().any(|id| id.trim().is_empty() || id.len() > 160) {
+            return Err("project_ids must be non-empty and at most 160 bytes".into());
+        }
         let unique_projects: HashSet<_> = self.project_ids.iter().collect();
         if unique_projects.len() != self.project_ids.len() {
             return Err("project_ids must not contain duplicates".into());
+        }
+        if self.supersedes.iter().any(|id| id.trim().is_empty() || id.len() > 160) {
+            return Err("supersedes IDs must be non-empty and at most 160 bytes".into());
         }
         let unique_supersedes: HashSet<_> = self.supersedes.iter().collect();
         if unique_supersedes.len() != self.supersedes.len() {
@@ -180,6 +186,9 @@ impl KnowledgeRecord {
         if self.version == 0 { return Err("version must be at least 1".into()); }
         if self.updated_at < self.created_at {
             return Err("updated_at must not precede created_at".into());
+        }
+        if self.expires_at.is_some_and(|expires_at| expires_at <= self.created_at) {
+            return Err("expires_at must follow created_at".into());
         }
         if let Some(confidence) = self.confidence {
             if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
@@ -205,6 +214,15 @@ impl KnowledgeRecord {
             return Err("disputed records require review_notes".into());
         }
         for source in &self.sources {
+            if source.artifact_id.as_ref().is_some_and(|id| id.trim().is_empty()) {
+                return Err("source artifact_id must not be empty".into());
+            }
+            if source.title.as_ref().is_some_and(|value| value.len() > 500) {
+                return Err("source title must not exceed 500 bytes".into());
+            }
+            if source.uri.as_ref().is_some_and(|value| value.len() > 4096) {
+                return Err("source URI must not exceed 4096 bytes".into());
+            }
             if let Some(digest) = &source.sha256 {
                 if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
                     return Err("source sha256 must contain exactly 64 hexadecimal characters".into());
@@ -369,4 +387,15 @@ mod tests {
         });
         assert!(item.validate().unwrap_err().contains("64 hexadecimal"));
     }
+    #[test]
+    fn rejects_empty_project_ids_and_expiry_before_creation() {
+        let mut item=record(EpistemicStatus::Unverified);
+        item.project_ids=vec![" ".into()];
+        assert!(item.validate().unwrap_err().contains("project_ids"));
+        item.project_ids.clear();
+        item.expires_at=Some(item.created_at);
+        assert!(item.validate().unwrap_err().contains("expires_at"));
+    }
+
+
 }
