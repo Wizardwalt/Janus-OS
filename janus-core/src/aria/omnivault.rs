@@ -53,6 +53,9 @@ pub fn import_approved_snapshot(
     if !approval.approved_conversation_ids.contains(&snapshot.id) {
         return Err(anyhow!("conversation was not included in the user's OmniVault approval"));
     }
+    if approval.approved_at > imported_at {
+        return Err(anyhow!("OmniVault approval timestamp cannot be later than import time"));
+    }
     if snapshot.id.trim().is_empty() || snapshot.title.trim().is_empty() {
         return Err(anyhow!("OmniVault conversation ID and title must not be empty"));
     }
@@ -63,6 +66,9 @@ pub fn import_approved_snapshot(
         .map_err(|error|anyhow!("OmniVault source snapshot is not valid JSON: {error}"))?;
     if !parsed.is_object() {
         return Err(anyhow!("OmniVault source snapshot must be a JSON object"));
+    }
+    if parsed.get("id").and_then(serde_json::Value::as_str) != Some(snapshot.id.as_str()) {
+        return Err(anyhow!("OmniVault source snapshot ID does not match the approved conversation"));
     }
     let digest = format!("{:x}",Sha256::digest(snapshot.source_json.as_bytes()));
     let artifact_id = format!(
