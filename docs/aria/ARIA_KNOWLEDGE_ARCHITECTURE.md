@@ -25,7 +25,7 @@ The machine-readable domain registry is `MULTICOLORED_HAT_REGISTRY.json`. The po
 
 1. Identify the user's task and constraints.
 2. Select a primary hat and relevant secondary hats; include White Hat evidence handling for factual work.
-3. Retrieve records using domain, tags, project scope, access policy, freshness, and relevance.
+3. Retrieve records using domain, tags, project scope, access policy, freshness, and relevance. The SQLite MVP now applies a conservative default scope (public/internal, unscoped records only); private/sensitive or project-scoped reads require an explicit scope supplied by the host after authorization.
 4. Prefer primary and authoritative sources where appropriate; preserve disagreements.
 5. Compose an answer that distinguishes sourced facts, inference, assumptions, and unknowns.
 6. Attach source references for material claims.
@@ -59,7 +59,7 @@ Provider adapters receive only the context needed for a task. Aria's stable know
 
 1. Establish and version the constitution, domain registry, and record schema. **This foundation is represented by this directory.**
 2. Add schema validation and deterministic unit tests. **Rust record contracts and invariant checks are implemented in `janus-core::aria`.**
-3. Implement a local durable knowledge store with provenance and versioning. **An initial SQLite-backed append-only store is implemented in `janus-core::aria::store`; it rejects ID overwrites, records supersession links, preserves old versions for audit, and supports case-insensitive search and hat filtering.**
+3. Implement a local durable knowledge store with provenance, versioning, and access-aware retrieval. **An initial SQLite-backed append-only store is implemented in `janus-core::aria::store`; it rejects ID overwrites, records supersession links, preserves old versions for audit, supports case-insensitive search and hat filtering, and enforces handling/project scopes on reads. The store does not authenticate users; the host remains responsible for constructing authorized scopes.**
 4. Add scalable indexed retrieval and then semantic retrieval; the current MVP search scans active records and is intended for an initial local knowledge corpus.
 5. Add source-grounded response assembly and contradiction reporting.
 6. Add a provider-neutral model gateway.
