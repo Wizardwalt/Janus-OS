@@ -75,3 +75,32 @@ Provider adapters receive only the context needed for a task. Aria's stable know
 - Domain classification is never treated as permission to execute tools.
 - Original artifacts remain unchanged and addressable by stable IDs/hashes.
 - Cross-domain answers retain provenance and disclose material uncertainty.
+
+
+## Stage 2 — Memory and learning pipeline (initial slice)
+
+The first Stage 2 implementation is a source-preserving UTF-8 text ingestion store in
+`janus-core::aria::ingestion`.
+
+- The host supplies a stable artifact ID, title, media type, source type, handling
+  classification, project scope, import timestamp, and optional expiry.
+- The exact original byte sequence is retained in SQLite and fingerprinted with
+  SHA-256. Duplicate artifact IDs are rejected rather than overwritten.
+- UTF-8 text is split into deterministic overlapping chunks. Each chunk carries
+  its ordinal and byte offsets into the original artifact.
+- Original bytes, manifests, and derived chunks are returned only when the
+  caller-supplied host scope permits the artifact's handling and project labels.
+  Expired artifacts are hidden from normal retrieval.
+- Import and chunk creation occur in one SQLite transaction. A failed import
+  cannot leave a partially indexed artifact.
+- The current adapter accepts UTF-8 text only. It does not yet extract PDF,
+  DOCX, HTML, images, audio, or video; those require dedicated, tested extractors.
+- This store does not authenticate callers, classify content automatically,
+  establish source truth, create personal memories, call an AI model, or train a
+  model. The host must authenticate and authorize scopes before constructing them.
+
+Next Stage 2 slices: document-format extraction with source locators; ingestion
+job state and retry/idempotency policy; reviewed knowledge-record creation from
+chunks; full-text indexing and source-grounded retrieval; user-controlled
+personal memory lifecycle and deletion/correction; and evaluation for extraction
+fidelity, citation accuracy, privacy boundaries, and retrieval quality.
