@@ -57,11 +57,13 @@ Stage 1 is the foundation, not a claim that every future capability already exis
 Implemented first slices:
 
 - Source-preserving UTF-8 text ingestion in `janus-core/src/aria/ingestion.rs`, retaining exact originals, SHA-256 hashes, deterministic chunks, byte locators, access scopes and expiry.
+- Plain-text validation and conservative simple-HTML extraction in `janus-core/src/aria/extraction.rs`.
+- Scoped chunk search that returns source-cited passages with original artifact hashes and byte ranges; retrieved passages can be converted directly into unverified learning proposals.
 - A durable human-review proposal queue in `janus-core/src/aria/learning.rs`. Proposals must cite the exact source artifact and hash; acceptance produces a `Reviewed` record, never an automatically `Verified` one.
 - Immutable accept/reject review receipts with reviewer identity, timestamp and notes.
 - A separate explicit personal-memory store in `janus-core/src/aria/memory.rs`, with owner-scoped reads/writes, corrections, expiry and forget behavior. Forget removes content and historical content digests while retaining minimal audit metadata.
 
-Stage 2 is **not complete**. Format-specific PDF/DOCX/HTML/OCR extraction, authenticated host integration, atomic review-to-knowledge persistence, private per-user conversation memory, citation-aware combined retrieval, automated hat suggestions, evaluation, retention/deletion controls and OmniVault integration remain to be implemented. The queue is a library component, not an authenticated review API; the host must authorize users and persist accepted records safely.
+Stage 2 is **not complete**. Standards-complete PDF/DOCX/HTML5 extraction, OCR, authenticated host integration, atomic review-to-knowledge persistence, automatic hat suggestions, unified retrieval across all memory classes, evaluation, host-managed encryption, retention/deletion workflows and OmniVault integration remain to be implemented. The current HTML helper handles only simple exported pages and is not a full HTML5 parser. The queue is a library component, not an authenticated review API; the host must authorize users and persist accepted records safely.
 
 See [Memory and Learning System](ARIA_MEMORY_AND_LEARNING.md) for the implementation contract and remaining exit criteria.
 
@@ -78,8 +80,10 @@ The Rust foundation lives in:
 
 - `janus-core/src/aria.rs`
 - `janus-core/src/aria/store.rs`
+- `janus-core/src/aria/extraction.rs`
 - `janus-core/src/aria/ingestion.rs`
 - `janus-core/src/aria/learning.rs`
+- `janus-core/src/aria/memory.rs`
 
 From the repository root, run the workspace checks:
 
