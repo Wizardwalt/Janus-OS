@@ -211,7 +211,10 @@
           "sources": {
             "minItems": 1
           }
-        }
+        },
+        "required": [
+          "sources"
+        ]
       }
     },
     {
@@ -228,6 +231,23 @@
       "then": {
         "required": [
           "review_notes"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "confidence": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "confidence"
+        ]
+      },
+      "then": {
+        "required": [
+          "confidence_method"
         ]
       }
     }
