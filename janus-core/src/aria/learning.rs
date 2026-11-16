@@ -177,6 +177,14 @@ impl LearningQueue {
         Ok(())
     }
 
+    pub fn get_proposal(&self, proposal_id: &str) -> Result<Option<LearningProposal>> {
+        let json:Option<String>=self.connection.query_row(
+            "SELECT proposal_json FROM aria_learning_proposals WHERE proposal_id=?1",
+            [proposal_id],|row|row.get(0)
+        ).optional()?;
+        json.map(|value|serde_json::from_str(&value).context("decoding learning proposal")).transpose()
+    }
+
     pub fn pending(&self, limit: usize) -> Result<Vec<LearningProposal>> {
         if limit == 0 { return Ok(Vec::new()); }
         let mut statement = self.connection.prepare(
@@ -193,6 +201,9 @@ impl LearningQueue {
     pub fn review(&mut self, receipt: &ReviewReceipt) -> Result<Option<KnowledgeRecord>> {
         if receipt.reviewer_id.trim().is_empty() {
             return Err(anyhow!("reviewer_id must not be empty"));
+        }
+        if receipt.notes.len()>4000 {
+            return Err(anyhow!("review notes must not exceed 4000 bytes"));
         }
         let decision = match receipt.decision {
             ReviewDecision::Accepted => "accepted",
