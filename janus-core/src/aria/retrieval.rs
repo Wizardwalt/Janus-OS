@@ -6,7 +6,7 @@
 
 use super::{
     AriaIngestionStore, IngestionAccessScope, KnowledgeAccessScope, KnowledgeRecord,
-    KnowledgeStore, MemoryStore, PersonalMemory, SourcePassage,
+    KnowledgeStore, MemoryStore, EncryptedMemoryStore, PersonalMemory, SourcePassage,
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -79,9 +79,11 @@ pub fn search_all(
         let hit=UnifiedSearchHit::Source(passage);
         ranked.push((score(&hit_text(&hit),query),hit));
     }
-    for memory in personal.search(owner_id,query,at,limit)? {
-        let hit=UnifiedSearchHit::Personal(memory);
-        ranked.push((score(&hit_text(&hit),query),hit));
+    if let Some(personal)=personal {
+        for memory in personal.search_memories(owner_id,query,at,limit)? {
+            let hit=UnifiedSearchHit::Personal(memory);
+            ranked.push((score(&hit_text(&hit),query),hit));
+        }
     }
     ranked.sort_by(|a,b|b.0.cmp(&a.0));
     Ok(ranked.into_iter().take(limit).map(|(_,hit)|hit).collect())
