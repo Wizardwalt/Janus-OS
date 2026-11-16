@@ -10,8 +10,10 @@ use super::{
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum UnifiedSearchHit {
     Knowledge(KnowledgeRecord),
     Source(SourcePassage),
