@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(record.epistemic_status,EpistemicStatus::Reviewed);
         assert!(record.review_notes.unwrap().contains("owner-1"));
         assert_eq!(queue.pending(10).unwrap().len(),0);
-        assert_eq!(queue.receipt("p1").unwrap(),Some(receipt));
+        assert_eq!(queue.receipt("p1").unwrap(),Some(receipt.clone()));
         assert!(queue.review(&ReviewReceipt {proposal_id:"p1".into(),..receipt}).is_err());
     }
 
