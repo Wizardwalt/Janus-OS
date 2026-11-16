@@ -163,15 +163,17 @@ impl AriaIngestionStore {
     }
 
     pub fn original_bytes(&self, id: &str, scope: &IngestionAccessScope) -> Result<Option<Vec<u8>>> {
-        let row: Option<(Vec<u8>,String,String,Option<String>)> = self.connection.query_row(
-            "SELECT original_bytes,handling,project_ids_json,expires_at
+        let row: Option<(Vec<u8>,String,String,Option<String>,String)> = self.connection.query_row(
+            "SELECT original_bytes,handling,project_ids_json,expires_at,sha256
              FROM aria_source_artifacts WHERE artifact_id=?1",
-            [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
+            [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
         ).optional()?;
-        let Some((bytes,handling,projects,expiry)) = row else { return Ok(None) };
+        let Some((bytes,handling,projects,expiry,expected_hash)) = row else { return Ok(None) };
         let projects: Vec<String> = serde_json::from_str(&projects)?;
         let expiry = parse_expiry(expiry)?;
         if !scope.allows(&handling,&projects,expiry) { return Ok(None); }
+        let actual_hash = format!("{:x}", Sha256::digest(&bytes));
+        if actual_hash != expected_hash { return Err(anyhow!("stored source artifact SHA-256 mismatch")); }
         Ok(Some(bytes))
     }
 
