@@ -85,7 +85,9 @@ impl IngestionAccessScope {
         if expiry.is_some_and(|v| v <= Utc::now()) || !self.handling.contains(handling) {
             return false;
         }
-        if projects.is_empty() { return self.include_unscoped; }
+        if projects.is_empty() {
+            return self.include_unscoped && matches!(handling,"public"|"internal");
+        }
         projects.iter().any(|id| self.projects.contains(id))
     }
 }
