@@ -124,6 +124,18 @@ fn decode_entity(entity: &str) -> char {
         "quot" => '"',
         "apos" => '\'',
         "nbsp" => ' ',
+        "copy" => '©',
+        "reg" => '®',
+        "trade" => '™',
+        "ndash" => '–',
+        "mdash" => '—',
+        "hellip" => '…',
+        "lsquo" => '‘',
+        "rsquo" => '’',
+        "ldquo" => '“',
+        "rdquo" => '”',
+        "times" => '×',
+        "divide" => '÷',
         value if value.starts_with("#x") || value.starts_with("#X") =>
             u32::from_str_radix(&value[2..],16).ok().and_then(char::from_u32).unwrap_or('\u{fffd}'),
         value if value.starts_with('#') =>
