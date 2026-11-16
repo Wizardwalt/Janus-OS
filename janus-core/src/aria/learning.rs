@@ -325,6 +325,23 @@ impl LearningQueue {
         Ok(completed)
     }
 
+    pub fn pending_persistence_for_project(&self, project_id:&str, limit:usize)->Result<usize> {
+        if project_id.trim().is_empty() || limit==0 { return Ok(0); }
+        let mut statement=self.connection.prepare(
+            "SELECT record_json FROM aria_learning_outbox WHERE persisted_at IS NULL"
+        )?;
+        let rows=statement.query_map([],|row|row.get::<_,String>(0))?;
+        let mut count=0usize;
+        for row in rows {
+            let record:KnowledgeRecord=serde_json::from_str(&row?)?;
+            if record.project_ids.iter().any(|id|id==project_id) {
+                count+=1;
+                if count>=limit { break; }
+            }
+        }
+        Ok(count)
+    }
+
     pub fn pending_persistence(&self, limit: usize) -> Result<usize> {
         let count:i64=self.connection.query_row(
             "SELECT COUNT(*) FROM aria_learning_outbox WHERE persisted_at IS NULL",
