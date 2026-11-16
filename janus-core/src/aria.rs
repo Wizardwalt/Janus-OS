@@ -158,8 +158,13 @@ impl KnowledgeRecord {
                 return Err("confidence_method is required when confidence is supplied".into());
             }
         }
-        if self.epistemic_status == EpistemicStatus::Verified && self.sources.is_empty() {
-            return Err("verified records require at least one source".into());
+        if self.epistemic_status == EpistemicStatus::Verified {
+            if self.sources.is_empty() {
+                return Err("verified records require at least one source".into());
+            }
+            if self.sources.iter().all(|source| source.source_type == KnowledgeSourceType::ModelGenerated) {
+                return Err("model-generated output alone cannot verify a knowledge record".into());
+            }
         }
         if self.epistemic_status == EpistemicStatus::Disputed
             && self.review_notes.as_deref().unwrap_or("").trim().is_empty()
@@ -235,10 +240,44 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_confidence_and_digest() {
+    fn rejects_invalid_confidence() {
         let mut item = record(EpistemicStatus::Unverified);
         item.confidence = Some(f32::NAN);
         item.confidence_method = Some("test".into());
         assert!(item.validate().unwrap_err().contains("finite"));
+    }
+
+    #[test]
+    fn model_output_alone_cannot_verify_a_record() {
+        let mut item = record(EpistemicStatus::Verified);
+        item.sources.push(KnowledgeSource {
+            source_type: KnowledgeSourceType::ModelGenerated,
+            title: Some("Generated answer".into()),
+            publisher: None,
+            uri: None,
+            artifact_id: None,
+            sha256: None,
+            retrieved_at: Utc::now(),
+            quoted_locator: None,
+            notes: None,
+        });
+        assert!(item.validate().unwrap_err().contains("model-generated"));
+    }
+
+    #[test]
+    fn rejects_malformed_source_digest() {
+        let mut item = record(EpistemicStatus::Unverified);
+        item.sources.push(KnowledgeSource {
+            source_type: KnowledgeSourceType::File,
+            title: None,
+            publisher: None,
+            uri: None,
+            artifact_id: Some("artifact-1".into()),
+            sha256: Some("not-a-sha256".into()),
+            retrieved_at: Utc::now(),
+            quoted_locator: None,
+            notes: None,
+        });
+        assert!(item.validate().unwrap_err().contains("64 hexadecimal"));
     }
 }
