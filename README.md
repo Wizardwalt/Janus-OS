@@ -103,6 +103,10 @@ The legacy WebSocket Lua runner is available only when `JANUS_DEMO_MODE=1` is ex
 
 ARIA's current chat replies and periodic thoughts are scripted interface text. They do not represent a connected language model, live network monitoring, radio scanning, or persistent learning. Live AI integration and verified telemetry are future integrations; the interface must not present simulated text as operational results.
 
+### Aria knowledge foundation
+
+The provider-independent Aria foundation is documented in [docs/aria](docs/aria/README.md). It defines Aria's constitution, ten-domain Multicolored Hat registry, portable knowledge records, and an initial SQLite-backed knowledge store with provenance, correction history, and scoped retrieval. This foundation is not yet connected to the scripted avatar/chat interface; live model, learning, voice, and tool integrations remain future work.
+
 ### Hardware status
 
 The production hardware API reports an adapter as ready only after a real driver is connected and can verify its state.
