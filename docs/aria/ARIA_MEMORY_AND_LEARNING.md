@@ -25,6 +25,17 @@ This is a preservation and text-indexing layer, not a PDF/DOCX/HTML parser. Form
 
 This closes the basic text → preserve → chunk → retrieve with citation → propose → human review library path. The caller still chooses the initial hat labels and source type; this is not automatic AI classification.
 
+## Implemented explainable Multicolored Hat suggestions
+
+`janus_core::aria::classification::suggest_hats` provides a deterministic keyword baseline:
+
+- returns each suggested hat with the exact matched terms and a simple match count;
+- suggests Rainbow when two or more non-White domains match;
+- suggests White for documentation, standards, source, and evidence terms;
+- returns no match rather than inventing a label.
+
+The match count is not a calibrated probability or confidence score. The function is advisory: a user or reviewer must select/correct the final hat labels. It does not automatically write knowledge records or grant capabilities. A future semantic/model classifier can be added behind the same review boundary.
+
 ## Implemented human-review learning queue
 
 `janus_core::aria::learning` provides a durable proposal and review queue:
@@ -82,7 +93,7 @@ The following are not claimed as implemented:
 - an end-to-end authenticated host/API that connects artifact ingestion, proposal review, and knowledge persistence atomically;
 - private per-user conversation events and explicit long-term memory controls;
 - unified retrieval across artifact chunks, reviewed knowledge, and approved conversation context (artifact chunk search now returns source-cited passages);
-- automatic Multicolored Hat suggestions with confidence and human correction;
+- calibrated semantic/model-based Multicolored Hat classification with human correction; the deterministic keyword baseline is implemented but is only advisory;
 - contradiction detection, re-review scheduling, retention/deletion workflows, and learning evaluation;
 - Live authenticated OmniVault-to-Janus host bridge and user consent UI; the read-only snapshot import contract exists, but the current Android gateway has no cross-app endpoint;
 - backup/restore coverage for all Aria-specific stores.
