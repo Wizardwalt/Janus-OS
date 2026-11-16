@@ -389,4 +389,19 @@ mod tests {
         second.supersedes = vec!["k-old".into()];
         assert!(store.insert(&second).is_err());
     }
+    #[test]
+    fn broad_host_scope_never_exposes_unscoped_private_records() {
+        let mut store=KnowledgeStore::in_memory().unwrap();
+        store.insert(&record("public-global","Public","Visible",vec![Hat::White])).unwrap();
+        let mut private=record("private-global","Private","Must stay hidden",vec![Hat::White]);
+        private.handling="private".into();
+        store.insert(&private).unwrap();
+        let scope=KnowledgeAccessScope::host_authorized(
+            &["public","internal","private"],&["owner:alice"],true
+        );
+        assert!(store.get_with_scope("public-global",false,&scope).unwrap().is_some());
+        assert!(store.get_with_scope("private-global",false,&scope).unwrap().is_none());
+    }
+
+
 }
