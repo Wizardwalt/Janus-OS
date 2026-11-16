@@ -321,6 +321,9 @@ impl ApiServer {
         let app = Router::new()
             .route("/aria/artifacts/text", post(aria_import_text))
             .route("/aria/search", get(aria_search))
+            .route("/aria/memory", get(aria_memory_list).post(aria_memory_remember))
+            .route("/aria/memory/:memory_id/correct", post(aria_memory_correct))
+            .route("/aria/memory/:memory_id", delete(aria_memory_forget))
             .route("/aria/proposals", post(aria_propose))
             .route("/aria/proposals/pending", get(aria_pending))
             .route("/aria/proposals/:proposal_id/review", post(aria_review))
@@ -439,7 +442,8 @@ async fn aria_search(
     let knowledge_scope=KnowledgeAccessScope::host_authorized(&["private"],&projects,false);
     let artifact_scope=IngestionAccessScope::host_authorized(&["private"],&projects,false);
     let result=match state.aria.lock() {
-        Ok(stores)=>search_all(&stores.knowledge,&stores.ingestion,&stores.memory,
+        Ok(stores)=>search_all(&stores.knowledge,&stores.ingestion,
+            stores.memory.as_ref().map(|memory|memory as &dyn PersonalMemorySearch),
             &query.q,&account.id,&knowledge_scope,&artifact_scope,chrono::Utc::now(),limit),
         Err(_)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
             status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
