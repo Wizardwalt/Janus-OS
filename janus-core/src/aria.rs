@@ -282,6 +282,12 @@ mod tests {
             .map(|hat| serde_json::to_value(hat).unwrap().as_str().unwrap().to_owned()).collect();
         assert_eq!(registry_ids, rust_ids);
         assert_eq!(registry_ids.len(), 10);
+
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../docs/aria/KNOWLEDGE_RECORD_SCHEMA.json")).unwrap();
+        let schema_ids: HashSet<String> = schema["properties"]["hat_ids"]["items"]["enum"].as_array().unwrap()
+            .iter().map(|value| value.as_str().unwrap().to_owned()).collect();
+        assert_eq!(registry_ids, schema_ids);
     }
 
     #[test]
