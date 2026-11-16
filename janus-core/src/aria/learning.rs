@@ -251,10 +251,7 @@ impl LearningQueue {
         for (proposal_id,json) in rows {
             let record: KnowledgeRecord = serde_json::from_str(&json)
                 .context("decoding accepted learning outbox record")?;
-            let handling=[record.handling.as_str()];
-            let projects:Vec<&str>=record.project_ids.iter().map(String::as_str).collect();
-            let scope=super::KnowledgeAccessScope::host_authorized(&handling,&projects,false);
-            match knowledge.get_with_scope(&record.id,true,&scope)? {
+            match knowledge.get_raw_for_persistence(&record.id)? {
                 Some(existing) if existing == record => {},
                 Some(_) => return Err(anyhow!("knowledge record {} exists with different content",record.id)),
                 None => knowledge.insert(&record)
