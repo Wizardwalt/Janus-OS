@@ -373,7 +373,7 @@ mod tests {
         let mut store=AriaIngestionStore::in_memory().unwrap();
         store.import_text(&input("manual-a"),b"Ohm's law relates voltage and current.",12,2).unwrap();
         let allowed=IngestionAccessScope::host_authorized(&["internal"],&["janus"],false);
-        let hits=store.search_chunks("voltage",&allowed,5).unwrap();
+        let hits=store.search_chunks("Ohm's",&allowed,5).unwrap();
         assert!(!hits.is_empty());
         assert!(hits.iter().all(|hit|hit.artifact_id=="manual-a" && hit.sha256.len()==64));
         for hit in hits {
@@ -381,7 +381,7 @@ mod tests {
             assert_eq!(&String::from_utf8(original).unwrap()[hit.start_byte..hit.end_byte],hit.text);
         }
         let denied=IngestionAccessScope::host_authorized(&["private"],&["janus"],false);
-        assert!(store.search_chunks("voltage",&denied,5).unwrap().is_empty());
+        assert!(store.search_chunks("Ohm's",&denied,5).unwrap().is_empty());
     }
 
 
