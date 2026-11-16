@@ -46,9 +46,9 @@ The match count is not a calibrated probability or confidence score. The functio
 4. Pending proposals can be listed for a review interface.
 5. A reviewer submits an immutable accept/reject receipt with reviewer ID, timestamp, and notes.
 6. Rejection returns no knowledge record. Acceptance returns the proposed record with epistemic status `Reviewed`; it does not automatically mark it verified.
-7. The host is responsible for authorizing the reviewer and persisting an accepted record into `KnowledgeStore`.
+7. The host is responsible for authorizing the reviewer. Accepted records are written to a durable outbox in the same transaction as the immutable review receipt; `LearningQueue::persist_pending` transfers them into `KnowledgeStore` and acknowledges only after persistence.
 
-The queue is a library component, not an authenticated API. Hosts must enforce user identity, artifact access, reviewer authorization, and project/handling scopes before calling it. The proposal queue and knowledge store are separate SQLite components; the host must handle the hand-off and report success only after both the review decision and accepted record are durably committed. A future host-level transaction coordinator should make that hand-off atomic.
+The queue is a library component, not an authenticated API. Hosts must enforce user identity, artifact access, reviewer authorization, and project/handling scopes before calling it. The proposal queue and knowledge store remain separate SQLite databases, so this is a recoverable at-least-once outbox hand-off, not a cross-database atomic transaction. If the process stops after knowledge insertion but before outbox acknowledgement, an identical record is recognized on retry. Conflicting existing records stop the hand-off for operator review. The host must report full learning persistence only after the outbox is drained.
 
 
 ## Implemented explicit personal-memory store
@@ -60,7 +60,7 @@ The queue is a library component, not an authenticated API. Hosts must enforce u
 - Corrections increment a version and retain an audit event containing the prior content digest.
 - Forgetting deletes the stored content and source references and clears prior content digests from the audit trail, retaining only minimal event metadata.
 - Expired memories are hidden from reads and lists and cannot be corrected.
-- Unit tests cover owner isolation, correction history, forget behavior, and expiry.
+- Unit tests cover owner isolation, correction history, forget behavior, expiry, and search beyond the most recently updated unmatched memories.
 
 The owner ID is an authorization input supplied by the host, not proof of identity. The host must authenticate the user before calling the store. This library component is not yet connected to the ARIA chat API or user interface. SQLite contents are not encrypted by this component; production hosts must provide OS/database encryption and protected key management before storing sensitive personal memories.
 
