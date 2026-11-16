@@ -53,7 +53,9 @@ impl KnowledgeAccessScope {
             return false;
         }
         if !self.allowed_handling.contains(&record.handling) { return false; }
-        if record.project_ids.is_empty() { return self.include_unscoped; }
+        if record.project_ids.is_empty() {
+            return self.include_unscoped && matches!(record.handling.as_str(),"public"|"internal");
+        }
         record.project_ids.iter().any(|id| self.allowed_projects.contains(id))
     }
 }
