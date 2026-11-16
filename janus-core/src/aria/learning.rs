@@ -399,7 +399,10 @@ mod tests {
         knowledge.insert(&accepted).unwrap();
         assert_eq!(queue.persist_pending(&mut knowledge,10).unwrap(),1);
         assert_eq!(queue.pending_persistence(10).unwrap(),0);
-        assert_eq!(knowledge.get(&accepted.id,true).unwrap(),Some(accepted));
+        let scope=super::super::KnowledgeAccessScope::host_authorized(
+            &["internal"],&["janus"],false
+        );
+        assert_eq!(knowledge.get_with_scope(&accepted.id,true,&scope).unwrap(),Some(accepted));
         assert_eq!(queue.persist_pending(&mut knowledge,10).unwrap(),0);
     }
 
