@@ -63,6 +63,48 @@ class JanusRuntimeApi {
   setState(namespace, key, value) { return this.request(`/state/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`, { method: 'POST', body: JSON.stringify(value) }); }
   plugins() { return this.request('/plugins'); }
   hardwareStatus() { return this.request('/hardware/status'); }
+
+  // Aria knowledge and memory APIs are authenticated independently of the
+  // demo WebSocket chat. These methods expose real persisted operations; they
+  // do not imply that a model provider is connected to the chat interface.
+  ariaImportText(title, text) {
+    return this.request('/aria/artifacts/text', {
+      method: 'POST', body: JSON.stringify({ title, text }),
+    });
+  }
+  ariaSearch(query, limit = 20) {
+    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    return this.request(`/aria/search?${params.toString()}`);
+  }
+  ariaRemember(content, sourceRefs = [], expiresAt = null) {
+    return this.request('/aria/memory', {
+      method: 'POST',
+      body: JSON.stringify({ content, source_refs: sourceRefs, expires_at: expiresAt }),
+    });
+  }
+  ariaMemories() { return this.request('/aria/memory'); }
+  ariaCorrectMemory(memoryId, content, expectedVersion) {
+    return this.request(`/aria/memory/${encodeURIComponent(memoryId)}/correct`, {
+      method: 'POST', body: JSON.stringify({ content, expected_version: expectedVersion }),
+    });
+  }
+  ariaForgetMemory(memoryId) {
+    return this.request(`/aria/memory/${encodeURIComponent(memoryId)}`, { method: 'DELETE' });
+  }
+  ariaCreateProposal(artifactId, query, title, hatIds, tags = []) {
+    return this.request('/aria/proposals', {
+      method: 'POST', body: JSON.stringify({ artifact_id: artifactId, query, title, hat_ids: hatIds, tags }),
+    });
+  }
+  ariaPendingProposals() { return this.request('/aria/proposals/pending'); }
+  ariaReviewProposal(proposalId, decision, notes = '') {
+    return this.request(`/aria/proposals/${encodeURIComponent(proposalId)}/review`, {
+      method: 'POST', body: JSON.stringify({ decision, notes }),
+    });
+  }
+  ariaPersistLearning() {
+    return this.request('/aria/learning/persist', { method: 'POST' });
+  }
   users() { return this.request('/auth/users'); }
   setUserActive(userId, active) { return this.request(`/auth/users/${encodeURIComponent(userId)}/${active ? 'enable' : 'disable'}`, { method: 'POST' }); }
   resetUserPassword(userId, password) { return this.request(`/auth/users/${encodeURIComponent(userId)}/password-reset`, { method: 'POST', body: JSON.stringify({ password }) }); }
