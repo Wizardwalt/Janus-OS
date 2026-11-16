@@ -437,4 +437,20 @@ mod tests {
     }
 
 
+    #[test]
+    fn pending_review_queue_is_project_scoped() {
+        let mut queue=LearningQueue::in_memory().unwrap();
+        let mut alice=proposal("alice-proposal");
+        alice.record.project_ids=vec!["aria-owner:alice".into(),"aria-org:org-a".into()];
+        let mut bob=proposal("bob-proposal");
+        bob.record.project_ids=vec!["aria-owner:bob".into(),"aria-org:org-b".into()];
+        queue.propose(&alice).unwrap();
+        queue.propose(&bob).unwrap();
+        let visible=queue.pending_for_project("aria-org:org-a",10).unwrap();
+        assert_eq!(visible.len(),1);
+        assert_eq!(visible[0].proposal_id,"alice-proposal");
+        assert!(queue.pending_for_project("aria-org:org-c",10).unwrap().is_empty());
+    }
+
+
 }
