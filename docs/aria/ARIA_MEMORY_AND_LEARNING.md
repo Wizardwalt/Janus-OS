@@ -29,6 +29,20 @@ This is a preservation and text-indexing layer, not a PDF/DOCX/HTML parser. Form
 
 The queue is a library component, not an authenticated API. Hosts must enforce user identity, artifact access, reviewer authorization, and project/handling scopes before calling it. The proposal queue and knowledge store are separate SQLite components; the host must handle the hand-off and report success only after both the review decision and accepted record are durably committed. A future host-level transaction coordinator should make that hand-off atomic.
 
+
+## Implemented explicit personal-memory store
+
+`janus_core::aria::memory` provides a separate SQLite store for explicit personal memories:
+
+- Each memory has an owner ID; reads, corrections, lists, and forget operations require the matching owner ID.
+- New memories must be explicitly written by the host. The store does not automatically turn conversation messages into memories.
+- Corrections increment a version and retain an audit event containing the prior content digest.
+- Forgetting deletes the stored content and source references and clears prior content digests from the audit trail, retaining only minimal event metadata.
+- Expired memories are hidden from reads and lists and cannot be corrected.
+- Unit tests cover owner isolation, correction history, forget behavior, and expiry.
+
+The owner ID is an authorization input supplied by the host, not proof of identity. The host must authenticate the user before calling the store. This library component is not yet connected to the ARIA chat API or user interface. SQLite contents are not encrypted by this component; production hosts must provide OS/database encryption and protected key management before storing sensitive personal memories.
+
 ## Trust and memory boundaries
 
 - Raw source artifacts remain authoritative; chunks and knowledge records are derived data.
