@@ -372,7 +372,7 @@ impl ApiServer {
             .layer(
                 CorsLayer::new()
                     .allow_origin(AllowOrigin::list(allowed_origins))
-                    .allow_methods([Method::GET, Method::POST])
+                    .allow_methods([Method::GET, Method::POST, Method::DELETE])
                     .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
             )
             .with_state(api_state);
