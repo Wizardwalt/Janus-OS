@@ -64,6 +64,19 @@ The queue is a library component, not an authenticated API. Hosts must enforce u
 
 The owner ID is an authorization input supplied by the host, not proof of identity. The host must authenticate the user before calling the store. This library component is not yet connected to the ARIA chat API or user interface. SQLite contents are not encrypted by this component; production hosts must provide OS/database encryption and protected key management before storing sensitive personal memories.
 
+## Authenticated Janus Runtime API integration
+
+The runtime now opens a separate Aria SQLite database beside the configured Janus runtime database and exposes these bearer-session-authenticated endpoints:
+
+- `POST /aria/artifacts/text` — import up to 1 MiB of UTF-8 text as a private artifact owned by the authenticated account.
+- `GET /aria/search?q=...` — unified search scoped to the authenticated account's private project and personal memories.
+- `POST /aria/proposals` — create a source-linked proposal from a passage in an artifact the caller owns; the proposal is explicitly submitted to the caller's organization review queue.
+- `GET /aria/proposals/pending` — list pending proposals scoped to the authenticated organization; Reviewer or OrganizationAdmin role required.
+- `POST /aria/proposals/{proposal_id}/review` — accept or reject an organization-scoped proposal; Reviewer or OrganizationAdmin role required. Accepted records enter the durable outbox and are persisted to the knowledge store before the endpoint reports success.
+- `POST /aria/learning/persist` — retry durable outbox persistence after an interrupted hand-off; Reviewer or OrganizationAdmin role required.
+
+Owner and organization identifiers are derived from the authenticated Janus session, never from request fields. Text imports are private by default, and proposal review is an explicit cross-user organization action. The API currently does not expose personal-memory writes, corrections, or deletion because the store still needs encrypted-at-rest support and a dedicated user-consent lifecycle before that surface is safe.
+
 ## Implemented unified library retrieval
 
 `janus_core::aria::retrieval::search_all` combines results from:
