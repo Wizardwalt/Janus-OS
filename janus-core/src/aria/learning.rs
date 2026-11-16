@@ -385,4 +385,26 @@ mod tests {
     }
 
 
+    #[test]
+    fn accepted_records_are_durably_persisted_through_recoverable_outbox() {
+        let mut queue=LearningQueue::in_memory().unwrap();
+        let mut knowledge=super::super::KnowledgeStore::in_memory().unwrap();
+        queue.propose(&proposal("outbox-1")).unwrap();
+        let receipt=ReviewReceipt {
+            proposal_id:"outbox-1".into(),decision:ReviewDecision::Accepted,
+            reviewer_id:"owner-1".into(),reviewed_at:Utc::now(),notes:"Reviewed source.".into(),
+        };
+        let accepted=queue.review(&receipt).unwrap().unwrap();
+        assert_eq!(accepted.epistemic_status,EpistemicStatus::Reviewed);
+        assert_eq!(queue.pending_persistence(10).unwrap(),1);
+
+        // Simulate a crash after the knowledge insert but before outbox ack.
+        knowledge.insert(&accepted).unwrap();
+        assert_eq!(queue.persist_pending(&mut knowledge,10).unwrap(),1);
+        assert_eq!(queue.pending_persistence(10).unwrap(),0);
+        assert_eq!(knowledge.get(&accepted.id,true).unwrap(),Some(accepted));
+        assert_eq!(queue.persist_pending(&mut knowledge,10).unwrap(),0);
+    }
+
+
 }
