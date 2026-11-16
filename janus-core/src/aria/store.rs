@@ -38,7 +38,7 @@ impl KnowledgeAccessScope {
     /// This is an enforcement input, not an authentication mechanism.
     pub fn host_authorized(handling: &[&str], project_ids: &[&str], include_unscoped: bool) -> Self {
         let allowed_handling = handling.iter()
-            .filter(|v| ["public", "internal", "private", "sensitive"].contains(v))
+            .filter(|v| matches!(**v, "public" | "internal" | "private" | "sensitive"))
             .map(|v| (*v).to_owned()).collect();
         Self {
             allowed_handling,
