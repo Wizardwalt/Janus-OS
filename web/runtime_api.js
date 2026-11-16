@@ -83,9 +83,9 @@ class JanusRuntimeApi {
     });
   }
   ariaMemories() { return this.request('/aria/memory'); }
-  ariaCorrectMemory(memoryId, content, expectedVersion) {
+  ariaCorrectMemory(memoryId, content, sourceRefs = []) {
     return this.request(`/aria/memory/${encodeURIComponent(memoryId)}/correct`, {
-      method: 'POST', body: JSON.stringify({ content, expected_version: expectedVersion }),
+      method: 'POST', body: JSON.stringify({ content, source_refs: sourceRefs }),
     });
   }
   ariaForgetMemory(memoryId) {
