@@ -5,7 +5,7 @@
 //! reviewer accepts or rejects it. Acceptance produces a Reviewed record;
 //! verification remains a separate evidence decision.
 
-use super::{EpistemicStatus, KnowledgeRecord};
+use super::{EpistemicStatus, Hat, KnowledgeContentType, KnowledgeRecord, KnowledgeSource, KnowledgeSourceType, SourcePassage};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -42,6 +42,63 @@ pub struct ReviewReceipt {
     pub reviewer_id: String,
     pub reviewed_at: DateTime<Utc>,
     pub notes: String,
+}
+
+impl LearningProposal {
+    /// Build an unverified proposal directly from a retrieved source passage.
+    /// The passage's byte range and digest are carried into provenance unchanged.
+    pub fn from_passage(
+        proposal_id: impl Into<String>,
+        title: impl Into<String>,
+        passage: &SourcePassage,
+        source_type: KnowledgeSourceType,
+        hat_ids: Vec<Hat>,
+        tags: Vec<String>,
+        handling: impl Into<String>,
+        project_ids: Vec<String>,
+        proposed_at: DateTime<Utc>,
+    ) -> Self {
+        let proposal_id = proposal_id.into();
+        let title = title.into();
+        let locator = SourceLocator {
+            artifact_id: passage.artifact_id.clone(),
+            sha256: passage.sha256.clone(),
+            start_byte: passage.start_byte,
+            end_byte: passage.end_byte,
+        };
+        let record = KnowledgeRecord {
+            id: format!("aria:proposal:{proposal_id}"),
+            schema_version: "1.0.0".into(),
+            title,
+            content: passage.text.clone(),
+            content_type: KnowledgeContentType::Reference,
+            hat_ids,
+            tags,
+            epistemic_status: EpistemicStatus::Unverified,
+            confidence: None,
+            confidence_method: None,
+            sources: vec![KnowledgeSource {
+                source_type,
+                title: Some(passage.title.clone()),
+                publisher: None,
+                uri: None,
+                artifact_id: Some(passage.artifact_id.clone()),
+                sha256: Some(passage.sha256.clone()),
+                retrieved_at: proposed_at,
+                quoted_locator: Some(format!("bytes {}..{}",passage.start_byte,passage.end_byte)),
+                notes: Some(format!("source chunk ordinal {}",passage.ordinal)),
+            }],
+            created_at: proposed_at,
+            updated_at: proposed_at,
+            version: 1,
+            supersedes: Vec::new(),
+            handling: handling.into(),
+            project_ids,
+            review_notes: None,
+            expires_at: None,
+        };
+        Self { proposal_id, record, source: locator, proposed_at }
+    }
 }
 
 pub struct LearningQueue {
