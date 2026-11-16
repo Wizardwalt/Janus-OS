@@ -12,6 +12,27 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Read-only search contract shared by plaintext test stores and encrypted
+/// production memory stores.
+pub trait PersonalMemorySearch {
+    fn search_memories(&self, owner_id:&str, query:&str, at:DateTime<Utc>, limit:usize)
+        -> Result<Vec<PersonalMemory>>;
+}
+
+impl PersonalMemorySearch for MemoryStore {
+    fn search_memories(&self,owner_id:&str,query:&str,at:DateTime<Utc>,limit:usize)
+        -> Result<Vec<PersonalMemory>> {
+        self.search(owner_id,query,at,limit)
+    }
+}
+
+impl PersonalMemorySearch for EncryptedMemoryStore {
+    fn search_memories(&self,owner_id:&str,query:&str,at:DateTime<Utc>,limit:usize)
+        -> Result<Vec<PersonalMemory>> {
+        self.search(owner_id,query,at,limit)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum UnifiedSearchHit {
@@ -40,7 +61,7 @@ fn score(text: &str, query: &str) -> usize {
 pub fn search_all(
     knowledge: &KnowledgeStore,
     artifacts: &AriaIngestionStore,
-    personal: &MemoryStore,
+    personal: Option<&dyn PersonalMemorySearch>,
     query: &str,
     owner_id: &str,
     knowledge_scope: &KnowledgeAccessScope,
@@ -109,7 +130,7 @@ mod tests {
         }).unwrap();
 
         let hits=search_all(
-            &knowledge,&artifacts,&personal,"diode","alice",
+            &knowledge,&artifacts,Some(&personal),"diode","alice",
             &KnowledgeAccessScope::public_internal(),
             &IngestionAccessScope::public_internal(),now,10,
         ).unwrap();
