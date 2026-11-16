@@ -46,9 +46,9 @@ The match count is not a calibrated probability or confidence score. The functio
 4. Pending proposals can be listed for a review interface.
 5. A reviewer submits an immutable accept/reject receipt with reviewer ID, timestamp, and notes.
 6. Rejection returns no knowledge record. Acceptance returns the proposed record with epistemic status `Reviewed`; it does not automatically mark it verified.
-7. The host is responsible for authorizing the reviewer. Accepted records are written to a durable outbox in the same transaction as the immutable review receipt; `LearningQueue::persist_pending` transfers them into `KnowledgeStore` and acknowledges only after persistence.
+7. The host is responsible for authorizing the reviewer. Accepted records are written to a durable outbox in the same transaction as the immutable review receipt; `LearningQueue::persist_pending_for_project` transfers only the authenticated organization's records into `KnowledgeStore` and acknowledges only after persistence.
 
-The queue is a library component, not an authenticated API. Hosts must enforce user identity, artifact access, reviewer authorization, and project/handling scopes before calling it. The proposal queue and knowledge store remain separate SQLite databases, so this is a recoverable at-least-once outbox hand-off, not a cross-database atomic transaction. If the process stops after knowledge insertion but before outbox acknowledgement, an identical record is recognized on retry. Conflicting existing records stop the hand-off for operator review. The host must report full learning persistence only after the outbox is drained.
+The queue is a library component, not an authenticated API. Hosts must enforce user identity, artifact access, reviewer authorization, and project/handling scopes before calling it. The proposal queue and knowledge store remain separate SQLite connections (on the Aria database file), so this is a recoverable at-least-once outbox hand-off, not a single SQLite transaction spanning review and knowledge insertion. If the process stops after knowledge insertion but before outbox acknowledgement, an identical record is recognized on retry. Conflicting existing records stop the hand-off for operator review. The host must report full learning persistence only after the outbox is drained.
 
 
 ## Implemented explicit personal-memory store
@@ -75,7 +75,7 @@ Authenticated, explicit user-action endpoints are available: `POST /aria/memory`
 The runtime now opens a separate Aria SQLite database beside the configured Janus runtime database and exposes these bearer-session-authenticated endpoints:
 
 - `POST /aria/artifacts/text` — import up to 1 MiB of UTF-8 text as a private artifact owned by the authenticated account.
-- `GET /aria/search?q=...` — unified search scoped to the authenticated account's private project and personal memories.
+- `GET /aria/search?q=...` — unified search over unscoped public/internal knowledge and artifacts, the authenticated account's own private project, and that account's encrypted personal memories. Unscoped private/sensitive records are never included.
 - `POST /aria/proposals` — create a source-linked proposal from a passage in an artifact the caller owns; the proposal is explicitly submitted to the caller's organization review queue.
 - `GET /aria/proposals/pending` — list pending proposals scoped to the authenticated organization; Reviewer or OrganizationAdmin role required.
 - `POST /aria/proposals/{proposal_id}/review` — accept or reject an organization-scoped proposal; Reviewer or OrganizationAdmin role required. Accepted records enter the durable outbox and are persisted to the knowledge store before the endpoint reports success.
