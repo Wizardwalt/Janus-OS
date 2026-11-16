@@ -7,18 +7,19 @@ use crate::{
 };
 use anyhow::Result;
 use axum::{
-    extract::{Path, State as AxumState},
+    extract::{Path, Query, State as AxumState},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::Json,
     routing::{get, post},
     Router,
 };
 use janus_core::{
+    aria::{AriaIngestionStore, IngestionAccessScope, KnowledgeAccessScope, KnowledgeStore, LearningProposal, LearningQueue, MemoryStore, ReviewDecision, ReviewReceipt, TextArtifactInput, Hat, KnowledgeSourceType, search_all},
     AuditEntry, CertificationStatus, Config, EngagementScope, LicensedFeature, SignedLicense,
     StateKey, UserRole,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::info;
 
@@ -28,7 +29,48 @@ pub struct ApiState {
     state_manager: Arc<StateManager>,
     executor: Arc<PluginExecutor>,
     hardware: Arc<HardwareManager>,
+    aria: Arc<Mutex<AriaRuntimeStores>>,
 }
+
+struct AriaRuntimeStores {
+    knowledge: KnowledgeStore,
+    ingestion: AriaIngestionStore,
+    learning: LearningQueue,
+    memory: MemoryStore,
+}
+
+impl AriaRuntimeStores {
+    fn open(path: &std::path::Path) -> Result<Self> {
+        if let Some(parent)=path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        Ok(Self {
+            knowledge:KnowledgeStore::open(path)?,
+            ingestion:AriaIngestionStore::open(path)?,
+            learning:LearningQueue::open(path)?,
+            memory:MemoryStore::open(path)?,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct AriaImportTextRequest { title:String, text:String }
+
+#[derive(Deserialize)]
+struct AriaSearchQuery { q:String, limit:Option<usize> }
+
+#[derive(Deserialize)]
+struct AriaProposalRequest {
+    artifact_id:String,
+    query:String,
+    title:String,
+    hat_ids:Vec<Hat>,
+    #[serde(default)]
+    tags:Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AriaReviewRequest { decision:ReviewDecision, notes:String }
 
 #[derive(Serialize, Deserialize)]
 struct HealthResponse {
@@ -210,11 +252,15 @@ impl ApiServer {
     }
 
     pub async fn start(self) -> Result<()> {
+        let aria_path=self.config.db_path.with_extension("aria.sqlite");
+        let aria=AriaRuntimeStores::open(&aria_path)
+            .with_context(||format!("opening Aria stores at {}",aria_path.display()))?;
         let api_state = ApiState {
             config: self.config.clone(),
             state_manager: self.state_manager,
             executor: self.executor,
             hardware: self.hardware,
+            aria:Arc::new(Mutex::new(aria)),
         };
 
         let allowed_origins = self
@@ -230,6 +276,12 @@ impl ApiServer {
         }
 
         let app = Router::new()
+            .route("/aria/artifacts/text", post(aria_import_text))
+            .route("/aria/search", get(aria_search))
+            .route("/aria/proposals", post(aria_propose))
+            .route("/aria/proposals/pending", get(aria_pending))
+            .route("/aria/proposals/:proposal_id/review", post(aria_review))
+            .route("/aria/learning/persist", post(aria_persist_pending))
             .route("/health", get(health))
             .route("/hardware/status", get(hardware_status))
             .route("/auth/bootstrap", post(bootstrap))
@@ -283,6 +335,219 @@ impl ApiServer {
 
         axum::serve(listener, app).await?;
         Ok(())
+    }
+}
+
+
+async fn aria_import_text(
+    AxumState(state):AxumState<ApiState>, headers:HeaderMap,
+    Json(request):Json<AriaImportTextRequest>,
+)->(StatusCode,Json<ApiResponse<serde_json::Value>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    if request.text.trim().is_empty() || request.text.len()>1024*1024 {
+        return (StatusCode::BAD_REQUEST,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("text must contain 1..=1 MiB of UTF-8 data".into())
+        }));
+    }
+    if request.title.trim().is_empty() || request.title.len()>500 {
+        return (StatusCode::BAD_REQUEST,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("title must contain 1..=500 bytes".into())
+        }));
+    }
+    let owner_project=format!("aria-owner:{}",account.id);
+    let input=TextArtifactInput {
+        artifact_id:format!("user:{}:{}",account.id,uuid::Uuid::new_v4()),
+        title:request.title,media_type:"text/plain; charset=utf-8".into(),
+        source_type:"authenticated_user_text".into(),handling:"private".into(),
+        project_ids:vec![owner_project],imported_at:chrono::Utc::now(),expires_at:None,
+    };
+    let result=match state.aria.lock() {
+        Ok(mut stores)=>stores.ingestion.import_text(&input,request.text.as_bytes(),1200,160),
+        Err(_)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
+        })),
+    };
+    match result {
+        Ok(manifest)=>(StatusCode::CREATED,Json(ApiResponse {
+            status:"success".into(),data:serde_json::to_value(manifest).ok(),error:None
+        })),
+        Err(error)=>(StatusCode::BAD_REQUEST,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some(error.to_string())
+        })),
+    }
+}
+
+async fn aria_search(
+    AxumState(state):AxumState<ApiState>,headers:HeaderMap,Query(query):Query<AriaSearchQuery>,
+)->(StatusCode,Json<ApiResponse<Vec<janus_core::aria::UnifiedSearchHit>>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    if query.q.trim().is_empty() || query.q.len()>500 {
+        return (StatusCode::BAD_REQUEST,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("q must contain 1..=500 bytes".into())
+        }));
+    }
+    let limit=query.limit.unwrap_or(20).clamp(1,50);
+    let owner_project=format!("aria-owner:{}",account.id);
+    let projects=[owner_project.as_str()];
+    let knowledge_scope=KnowledgeAccessScope::host_authorized(&["private"],&projects,false);
+    let artifact_scope=IngestionAccessScope::host_authorized(&["private"],&projects,false);
+    let result=match state.aria.lock() {
+        Ok(stores)=>search_all(&stores.knowledge,&stores.ingestion,&stores.memory,
+            &query.q,&account.id,&knowledge_scope,&artifact_scope,chrono::Utc::now(),limit),
+        Err(_)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
+        })),
+    };
+    match result {
+        Ok(hits)=>(StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(hits),error:None})),
+        Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some(error.to_string())
+        })),
+    }
+}
+
+async fn aria_propose(
+    AxumState(state):AxumState<ApiState>,headers:HeaderMap,
+    Json(request):Json<AriaProposalRequest>,
+)->(StatusCode,Json<ApiResponse<serde_json::Value>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    if request.query.trim().is_empty() || request.title.trim().is_empty()
+        || request.hat_ids.is_empty() || request.hat_ids.len()>10 {
+        return (StatusCode::BAD_REQUEST,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("query, title, and 1..=10 hat suggestions are required".into())
+        }));
+    }
+    let owner_project=format!("aria-owner:{}",account.id);
+    let scope=IngestionAccessScope::host_authorized(&["private"],&[owner_project.as_str()],false);
+    let mut stores=match state.aria.lock() {
+        Ok(stores)=>stores,
+        Err(_)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
+        })),
+    };
+    let passages=match stores.ingestion.search_chunks(&request.query,&scope,50) {
+        Ok(passages)=>passages,
+        Err(error)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some(error.to_string())
+        })),
+    };
+    let Some(passage)=passages.into_iter().find(|passage|passage.artifact_id==request.artifact_id) else {
+        return (StatusCode::NOT_FOUND,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("no matching passage found in an artifact owned by this account".into())
+        }));
+    };
+    let proposal_id=uuid::Uuid::new_v4().to_string();
+    let proposal=LearningProposal::from_passage(
+        proposal_id,request.title,&passage,KnowledgeSourceType::File,request.hat_ids,
+        request.tags,"private",vec![owner_project],chrono::Utc::now()
+    );
+    match stores.learning.propose(&proposal) {
+        Ok(())=>(StatusCode::CREATED,Json(ApiResponse {
+            status:"success".into(),data:serde_json::to_value(proposal).ok(),error:None
+        })),
+        Err(error)=>(StatusCode::BAD_REQUEST,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some(error.to_string())
+        })),
+    }
+}
+
+async fn aria_pending(
+    AxumState(state):AxumState<ApiState>,headers:HeaderMap,
+)->(StatusCode,Json<ApiResponse<Vec<LearningProposal>>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    if !account.role.may_view_audit_logs() {
+        return (StatusCode::FORBIDDEN,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("reviewer or organization administrator role required".into())
+        }));
+    }
+    match state.aria.lock() {
+        Ok(stores)=>match stores.learning.pending(100) {
+            Ok(items)=>(StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(items),error:None})),
+            Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
+        },
+        Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())})),
+    }
+}
+
+async fn aria_review(
+    AxumState(state):AxumState<ApiState>,headers:HeaderMap,Path(proposal_id):Path<String>,
+    Json(request):Json<AriaReviewRequest>,
+)->(StatusCode,Json<ApiResponse<serde_json::Value>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    if !account.role.may_view_audit_logs() {
+        return (StatusCode::FORBIDDEN,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("reviewer or organization administrator role required".into())
+        }));
+    }
+    let mut stores=match state.aria.lock() {
+        Ok(stores)=>stores,
+        Err(_)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
+        })),
+    };
+    let receipt=ReviewReceipt {
+        proposal_id,decision:request.decision,reviewer_id:account.id,
+        reviewed_at:chrono::Utc::now(),notes:request.notes,
+    };
+    match stores.learning.review(&receipt) {
+        Ok(record)=>{
+            let persisted=match stores.learning.persist_pending(&mut stores.knowledge,100) {
+                Ok(count)=>count,
+                Err(error)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+                    status:"error".into(),data:None,error:Some(format!("review receipt is durable; accepted record remains in recovery outbox: {error}"))
+                })),
+            };
+            let pending=stores.learning.pending_persistence(100).unwrap_or(0);
+            (StatusCode::OK,Json(ApiResponse {
+                status:"success".into(),data:Some(serde_json::json!({
+                    "receipt":receipt,"accepted_record":record,"persisted_count":persisted,
+                    "pending_persistence":pending
+                })),error:None
+            }))
+        },
+        Err(error)=>(StatusCode::BAD_REQUEST,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some(error.to_string())
+        })),
+    }
+}
+
+async fn aria_persist_pending(
+    AxumState(state):AxumState<ApiState>,headers:HeaderMap,
+)->(StatusCode,Json<ApiResponse<serde_json::Value>>) {
+    let account=match authenticated_account(&state.state_manager,&headers).await {
+        Ok(account)=>account,Err(error)=>return unauthorized_response(error),
+    };
+    if !account.role.may_view_audit_logs() {
+        return (StatusCode::FORBIDDEN,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("reviewer or organization administrator role required".into())
+        }));
+    }
+    let mut stores=match state.aria.lock() {
+        Ok(stores)=>stores,
+        Err(_)=>return (StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
+        })),
+    };
+    match stores.learning.persist_pending(&mut stores.knowledge,100) {
+        Ok(count)=>(StatusCode::OK,Json(ApiResponse {
+            status:"success".into(),data:Some(serde_json::json!({
+                "persisted_count":count,
+                "pending_persistence":stores.learning.pending_persistence(100).unwrap_or(0)
+            })),error:None
+        })),
+        Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
+            status:"error".into(),data:None,error:Some(error.to_string())
+        })),
     }
 }
 
