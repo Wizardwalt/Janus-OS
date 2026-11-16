@@ -727,13 +727,14 @@ async fn aria_persist_pending(
     let org_project=format!("aria-org:{}",account.organization_id);
     let persisted_result={
         let AriaRuntimeStores { learning, knowledge, .. } = &mut *stores;
-        learning.persist_pending(knowledge,100)
+        learning.persist_pending_for_project(knowledge,&org_project,100)
     };
     match persisted_result {
         Ok(count)=>(StatusCode::OK,Json(ApiResponse {
             status:"success".into(),data:Some(serde_json::json!({
                 "persisted_count":count,
-                "pending_persistence":stores.learning.pending_persistence(100).unwrap_or(0)
+                "pending_persistence":stores.learning
+                    .pending_persistence_for_project(&org_project,100).unwrap_or(0)
             })),error:None
         })),
         Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
