@@ -304,4 +304,21 @@ mod tests {
         store.remember(&item).unwrap();
         assert!(store.get("alice","secret-3",item.created_at+Duration::seconds(2)).unwrap().is_none());
     }
+    #[test]
+    fn encrypted_memory_search_is_owner_scoped() {
+        let key=[4u8;32];
+        let mut store=EncryptedMemoryStore::in_memory(&key).unwrap();
+        let mut alice=sample("alice-memory","alice");
+        alice.content="Alice is repairing a BMX bicycle.".into();
+        store.remember(&alice).unwrap();
+        let mut bob=sample("bob-memory","bob");
+        bob.content="Bob is repairing a bicycle.".into();
+        store.remember(&bob).unwrap();
+        let hits=store.search("alice","BMX",Utc::now(),10).unwrap();
+        assert_eq!(hits.len(),1);
+        assert_eq!(hits[0].owner_id,"alice");
+        assert!(store.search("bob","BMX",Utc::now(),10).unwrap().is_empty());
+    }
+
+
 }
