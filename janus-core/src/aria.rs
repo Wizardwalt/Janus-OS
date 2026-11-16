@@ -23,7 +23,7 @@ pub use ingestion::{ArtifactManifest, AriaIngestionStore, IngestionAccessScope, 
 pub use learning::{LearningProposal, LearningQueue, ReviewDecision, ReviewReceipt, SourceLocator};
 pub use memory::{MemoryAuditEvent, MemoryStore, PersonalMemory};
 pub use omnivault::{import_approved_snapshot, OmniVaultConversationSnapshot, OmniVaultMessage, OmniVaultReadApproval};
-pub use retrieval::{search_all, UnifiedSearchHit};
+pub use retrieval::{search_all, PersonalMemorySearch, UnifiedSearchHit};
 pub use store::{KnowledgeAccessScope, KnowledgeStore};
 
 /// Stable domain identifiers shared with docs/aria/MULTICOLORED_HAT_REGISTRY.json.
