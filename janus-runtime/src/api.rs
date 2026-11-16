@@ -104,7 +104,9 @@ struct AriaProposalRequest {
 }
 
 #[derive(Deserialize)]
-struct AriaReviewRequest { decision:ReviewDecision, notes:String }\n#[derive(Deserialize)]
+struct AriaReviewRequest { decision:ReviewDecision, notes:String }
+
+#[derive(Deserialize)]
 struct AriaMemoryRequest {
     content:String,
     #[serde(default)]
