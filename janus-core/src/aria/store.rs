@@ -321,7 +321,9 @@ mod tests {
         let mut expired = record("expired", "Expired note", "No longer current", vec![Hat::White]);
         expired.handling = "private".into();
         expired.project_ids = vec!["janus".into()];
-        expired.expires_at = Some(Utc::now() - chrono::Duration::seconds(1));
+        expired.created_at = Utc::now() - chrono::Duration::days(2);
+        expired.updated_at = expired.created_at;
+        expired.expires_at = Some(Utc::now() - chrono::Duration::days(1));
         store.insert(&expired).unwrap();
 
         let scope = KnowledgeAccessScope::host_authorized(&["private"], &["janus"], false);
