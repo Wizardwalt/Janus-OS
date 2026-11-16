@@ -11,11 +11,13 @@ pub mod extraction;
 pub mod ingestion;
 pub mod learning;
 pub mod memory;
+pub mod omnivault;
 pub mod store;
 pub use extraction::{extract_plain_text, extract_simple_html, ExtractedText};
 pub use ingestion::{ArtifactManifest, AriaIngestionStore, IngestionAccessScope, TextArtifactInput, TextChunk, SourcePassage};
 pub use learning::{LearningProposal, LearningQueue, ReviewDecision, ReviewReceipt, SourceLocator};
 pub use memory::{MemoryAuditEvent, MemoryStore, PersonalMemory};
+pub use omnivault::{import_approved_snapshot, OmniVaultConversationSnapshot, OmniVaultMessage, OmniVaultReadApproval};
 pub use store::{KnowledgeAccessScope, KnowledgeStore};
 
 /// Stable domain identifiers shared with docs/aria/MULTICOLORED_HAT_REGISTRY.json.
