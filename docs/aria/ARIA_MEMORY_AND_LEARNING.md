@@ -53,6 +53,17 @@ The queue is a library component, not an authenticated API. Hosts must enforce u
 
 The owner ID is an authorization input supplied by the host, not proof of identity. The host must authenticate the user before calling the store. This library component is not yet connected to the ARIA chat API or user interface. SQLite contents are not encrypted by this component; production hosts must provide OS/database encryption and protected key management before storing sensitive personal memories.
 
+## Implemented read-only OmniVault snapshot import contract
+
+`janus_core::aria::omnivault` accepts a normalized conversation snapshot supplied by a host after explicit user approval:
+
+- The approval names the authenticated owner and the exact conversation IDs permitted for import.
+- The adapter rejects conversations outside that allow-list, mismatched source IDs, future approval timestamps, empty conversations, and invalid source JSON.
+- It copies the normalized source JSON snapshot unchanged into Aria's private, owner-scoped ingestion store and fingerprints it with SHA-256.
+- The adapter exposes no OmniVault write, delete, or mutation operation. The original provider archive remains authoritative in OmniVault; this imported normalized snapshot is a separate read-only-derived copy.
+
+This is a Rust import contract, not a live Android-to-Janus connector. The current OmniVault Android `VaultGateway` is in-process and does not expose a cross-app endpoint. A future authenticated host bridge must obtain consent, read only the selected conversations, and construct `OmniVaultReadApproval` from that authenticated grant. The normalized snapshot's hash is not represented as the original provider ZIP hash; do not confuse the two.
+
 ## Trust and memory boundaries
 
 - Raw source artifacts remain authoritative; chunks and knowledge records are derived data.
@@ -73,7 +84,7 @@ The following are not claimed as implemented:
 - unified retrieval across artifact chunks, reviewed knowledge, and approved conversation context (artifact chunk search now returns source-cited passages);
 - automatic Multicolored Hat suggestions with confidence and human correction;
 - contradiction detection, re-review scheduling, retention/deletion workflows, and learning evaluation;
-- OmniVault read-only connector and user consent UI;
+- Live authenticated OmniVault-to-Janus host bridge and user consent UI; the read-only snapshot import contract exists, but the current Android gateway has no cross-app endpoint;
 - backup/restore coverage for all Aria-specific stores.
 
 ## Developer verification
