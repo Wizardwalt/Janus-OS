@@ -191,13 +191,31 @@ impl MemoryStore {
     /// Search only the authenticated owner's active memories.
     pub fn search(&self, owner_id: &str, query: &str, at: DateTime<Utc>, limit: usize) -> Result<Vec<PersonalMemory>> {
         if limit == 0 { return Ok(Vec::new()); }
-        let needle=query.trim().to_lowercase();
-        let memories=self.list(owner_id,at,limit.saturating_mul(4).max(limit))?;
-        Ok(memories.into_iter().filter(|memory| {
-            needle.is_empty()
-                || memory.content.to_lowercase().contains(&needle)
-                || memory.source_refs.iter().any(|source|source.to_lowercase().contains(&needle))
-        }).take(limit).collect())
+        let needle=query.trim();
+        let mut statement=self.connection.prepare(
+            "SELECT memory_id,content,source_refs_json,created_at,updated_at,expires_at,version
+             FROM aria_personal_memories
+             WHERE owner_id=?1 AND (expires_at IS NULL OR expires_at>?2)
+               AND (?3='' OR instr(lower(content),lower(?3))>0
+                    OR instr(lower(source_refs_json),lower(?3))>0)
+             ORDER BY updated_at DESC,memory_id ASC LIMIT ?4"
+        )?;
+        let rows=statement.query_map(
+            params![owner_id,at.to_rfc3339(),needle,i64::try_from(limit)?],
+            |r|Ok((
+                r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,
+                r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?,
+                r.get::<_,i64>(6)?
+            ))
+        )?;
+        let mut result=Vec::new();
+        for row in rows {
+            let (id,content,refs,created,updated,expiry,version)=row?;
+            if let Some(memory)=row_to_memory(
+                &id,owner_id,Some((content,refs,created,updated,expiry,version)),at
+            )? { result.push(memory); }
+        }
+        Ok(result)
     }
 
     pub fn audit_events(&self, owner_id: &str, memory_id: &str) -> Result<Vec<MemoryAuditEvent>> {
@@ -312,4 +330,23 @@ mod tests {
         assert!(store.get("alice","m1",later).unwrap().is_none());
         assert!(store.correct("alice","m1","new",&[],later).is_err());
     }
+    #[test]
+    fn search_finds_matching_memory_beyond_recent_unmatched_items() {
+        let mut store=MemoryStore::in_memory().unwrap();
+        for i in 0..8 {
+            let mut item=memory(&format!("m{i}"),"alice");
+            item.content=format!("Unrelated note number {i}");
+            item.updated_at=item.created_at+chrono::Duration::seconds(i);
+            store.remember(&item).unwrap();
+        }
+        let mut target=memory("target","alice");
+        target.content="Important diode testing preference".into();
+        target.updated_at=target.created_at+chrono::Duration::seconds(20);
+        store.remember(&target).unwrap();
+        let found=store.search("alice","diode",Utc::now(),1).unwrap();
+        assert_eq!(found.len(),1);
+        assert_eq!(found[0].memory_id,"target");
+    }
+
+
 }
