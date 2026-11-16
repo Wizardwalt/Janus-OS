@@ -402,7 +402,7 @@ mod tests {
         let scope=super::super::KnowledgeAccessScope::host_authorized(
             &["internal"],&["janus"],false
         );
-        assert_eq!(knowledge.get_with_scope(&accepted.id,true,&scope).unwrap(),Some(accepted));
+        assert_eq!(knowledge.get_raw_for_persistence(&accepted.id).unwrap(),Some(accepted));
         assert_eq!(queue.persist_pending(&mut knowledge,10).unwrap(),0);
     }
 
