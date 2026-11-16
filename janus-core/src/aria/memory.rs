@@ -243,7 +243,7 @@ fn audit(tx:&rusqlite::Transaction<'_>,id:&str,owner:&str,event:&str,at:DateTime
     Ok(())
 }
 
-fn validate(memory:&PersonalMemory)->Result<()> {
+pub(super) fn validate(memory:&PersonalMemory)->Result<()> {
     if memory.memory_id.trim().is_empty() || memory.memory_id.len()>160 {return Err(anyhow!("memory_id must be 1..=160 bytes"));}
     if memory.owner_id.trim().is_empty() || memory.owner_id.len()>160 {return Err(anyhow!("owner_id must be 1..=160 bytes"));}
     if memory.content.trim().is_empty() {return Err(anyhow!("memory content must not be empty"));}
