@@ -59,6 +59,7 @@ Implemented first slices:
 - Source-preserving UTF-8 text ingestion in `janus-core/src/aria/ingestion.rs`, retaining exact originals, SHA-256 hashes, deterministic chunks, byte locators, access scopes and expiry.
 - A durable human-review proposal queue in `janus-core/src/aria/learning.rs`. Proposals must cite the exact source artifact and hash; acceptance produces a `Reviewed` record, never an automatically `Verified` one.
 - Immutable accept/reject review receipts with reviewer identity, timestamp and notes.
+- A separate explicit personal-memory store in `janus-core/src/aria/memory.rs`, with owner-scoped reads/writes, corrections, expiry and forget behavior. Forget removes content and historical content digests while retaining minimal audit metadata.
 
 Stage 2 is **not complete**. Format-specific PDF/DOCX/HTML/OCR extraction, authenticated host integration, atomic review-to-knowledge persistence, private per-user conversation memory, citation-aware combined retrieval, automated hat suggestions, evaluation, retention/deletion controls and OmniVault integration remain to be implemented. The queue is a library component, not an authenticated review API; the host must authorize users and persist accepted records safely.
 
