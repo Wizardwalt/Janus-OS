@@ -74,6 +74,7 @@ pub enum KnowledgeSourceType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KnowledgeSource {
     pub source_type: KnowledgeSourceType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,6 +97,7 @@ pub struct KnowledgeSource {
 /// Portable knowledge item. Original files remain in their host's
 /// preservation layer; this record stores references and derived knowledge.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KnowledgeRecord {
     pub id: String,
     pub schema_version: String,
@@ -136,8 +138,23 @@ impl KnowledgeRecord {
     /// Validate core invariants shared by every Aria host.
     pub fn validate(&self) -> Result<(), String> {
         if self.id.trim().is_empty() { return Err("id must not be empty".into()); }
+        if self.id.len() > 160 { return Err("id must not exceed 160 bytes".into()); }
         if self.title.trim().is_empty() { return Err("title must not be empty".into()); }
+        if self.title.len() > 500 { return Err("title must not exceed 500 bytes".into()); }
         if self.content.trim().is_empty() { return Err("content must not be empty".into()); }
+        if self.tags.iter().any(|tag| tag.len() > 100) {
+            return Err("tags must not exceed 100 bytes each".into());
+        }
+        let unique_tags: HashSet<_> = self.tags.iter().collect();
+        if unique_tags.len() != self.tags.len() { return Err("tags must not contain duplicates".into()); }
+        let unique_projects: HashSet<_> = self.project_ids.iter().collect();
+        if unique_projects.len() != self.project_ids.len() {
+            return Err("project_ids must not contain duplicates".into());
+        }
+        let unique_supersedes: HashSet<_> = self.supersedes.iter().collect();
+        if unique_supersedes.len() != self.supersedes.len() {
+            return Err("supersedes must not contain duplicates".into());
+        }
         if self.schema_version != "1.0.0" {
             return Err(format!("unsupported schema_version: {}", self.schema_version));
         }
@@ -154,9 +171,11 @@ impl KnowledgeRecord {
             if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
                 return Err("confidence must be a finite number between 0 and 1".into());
             }
-            if self.confidence_method.as_deref().unwrap_or("").trim().is_empty() {
+            let method = self.confidence_method.as_deref().unwrap_or("");
+            if method.trim().is_empty() {
                 return Err("confidence_method is required when confidence is supplied".into());
             }
+            if method.len() > 500 { return Err("confidence_method must not exceed 500 bytes".into()); }
         }
         if self.epistemic_status == EpistemicStatus::Verified {
             if self.sources.is_empty() {
@@ -213,6 +232,56 @@ mod tests {
             review_notes: None,
             expires_at: None,
         }
+    }
+
+
+    #[test]
+    fn rejects_unknown_fields_in_portable_record_json() {
+        let json = serde_json::json!({
+            "id": "k-unknown",
+            "schema_version": "1.0.0",
+            "title": "Unknown field",
+            "content": "Should reject unexpected fields.",
+            "content_type": "fact",
+            "hat_ids": ["white"],
+            "tags": [],
+            "epistemic_status": "unverified",
+            "sources": [],
+            "created_at": Utc::now(),
+            "updated_at": Utc::now(),
+            "version": 1,
+            "supersedes": [],
+            "handling": "internal",
+            "project_ids": [],
+            "unexpected": true
+        });
+        assert!(serde_json::from_value::<KnowledgeRecord>(json).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_project_and_supersession_ids() {
+        let mut item = record(EpistemicStatus::Unverified);
+        item.project_ids = vec!["janus".into(), "janus".into()];
+        assert!(item.validate().unwrap_err().contains("project_ids"));
+        item.project_ids.clear();
+        item.supersedes = vec!["old".into(), "old".into()];
+        assert!(item.validate().unwrap_err().contains("supersedes"));
+    }
+
+    #[test]
+    fn registry_and_rust_hat_identifiers_stay_in_sync() {
+        let registry: serde_json::Value =
+            serde_json::from_str(include_str!("../../docs/aria/MULTICOLORED_HAT_REGISTRY.json")).unwrap();
+        let registry_ids: HashSet<String> = registry["hats"].as_array().unwrap().iter()
+            .map(|hat| hat["id"].as_str().unwrap().to_owned()).collect();
+        let hats = [
+            Hat::Red, Hat::Orange, Hat::Yellow, Hat::Green, Hat::Blue,
+            Hat::Purple, Hat::Black, Hat::White, Hat::Brown, Hat::Rainbow,
+        ];
+        let rust_ids: HashSet<String> = hats.iter()
+            .map(|hat| serde_json::to_value(hat).unwrap().as_str().unwrap().to_owned()).collect();
+        assert_eq!(registry_ids, rust_ids);
+        assert_eq!(registry_ids.len(), 10);
     }
 
     #[test]
