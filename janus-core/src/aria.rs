@@ -11,7 +11,7 @@ pub mod ingestion;
 pub mod learning;
 pub mod memory;
 pub mod store;
-pub use ingestion::{ArtifactManifest, AriaIngestionStore, IngestionAccessScope, TextArtifactInput, TextChunk};
+pub use ingestion::{ArtifactManifest, AriaIngestionStore, IngestionAccessScope, TextArtifactInput, TextChunk, SourcePassage};
 pub use learning::{LearningProposal, LearningQueue, ReviewDecision, ReviewReceipt, SourceLocator};
 pub use memory::{MemoryAuditEvent, MemoryStore, PersonalMemory};
 pub use store::{KnowledgeAccessScope, KnowledgeStore};
