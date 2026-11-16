@@ -269,23 +269,48 @@ impl LearningQueue {
     /// process crashes after knowledge insertion but before marking the outbox
     /// row complete, an identical existing record is recognized on retry.
     pub fn persist_pending(&mut self, knowledge: &mut super::KnowledgeStore, limit: usize) -> Result<usize> {
-        if limit == 0 { return Ok(0); }
-        let rows: Vec<(String,String)> = {
-            let mut statement = self.connection.prepare(
+        self.persist_pending_filtered(knowledge,None,limit)
+    }
+
+    /// Persist only accepted records assigned to one exact project/tenant scope.
+    pub fn persist_pending_for_project(
+        &mut self, knowledge: &mut super::KnowledgeStore, project_id: &str, limit: usize
+    ) -> Result<usize> {
+        if project_id.trim().is_empty() { return Err(anyhow!("project_id must not be empty")); }
+        self.persist_pending_filtered(knowledge,Some(project_id),limit)
+    }
+
+    fn persist_pending_filtered(
+        &mut self, knowledge: &mut super::KnowledgeStore,
+        project_filter:Option<&str>, limit:usize
+    )->Result<usize> {
+        if limit==0 { return Ok(0); }
+        let candidates:Vec<(String,String)> = {
+            let mut statement=self.connection.prepare(
                 "SELECT proposal_id,record_json FROM aria_learning_outbox
-                 WHERE persisted_at IS NULL ORDER BY proposal_id LIMIT ?1"
+                 WHERE persisted_at IS NULL ORDER BY proposal_id"
             )?;
-            let mapped = statement.query_map([i64::try_from(limit)?], |row| {
-                Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?))
-            })?;
+            let mapped=statement.query_map([],|row|Ok((
+                row.get::<_,String>(0)?,row.get::<_,String>(1)?
+            )))?;
             mapped.collect::<std::result::Result<Vec<_>,_>>()?
         };
+        let mut rows=Vec::new();
+        for (proposal_id,json) in candidates {
+            if let Some(project_id)=project_filter {
+                let record:KnowledgeRecord=serde_json::from_str(&json)
+                    .context("decoding accepted learning outbox record for project filter")?;
+                if !record.project_ids.iter().any(|id|id==project_id) { continue; }
+            }
+            rows.push((proposal_id,json));
+            if rows.len()>=limit { break; }
+        }
         let mut completed=0usize;
         for (proposal_id,json) in rows {
-            let record: KnowledgeRecord = serde_json::from_str(&json)
+            let record:KnowledgeRecord=serde_json::from_str(&json)
                 .context("decoding accepted learning outbox record")?;
             match knowledge.get_raw_for_persistence(&record.id)? {
-                Some(existing) if existing == record => {},
+                Some(existing) if existing==record => {},
                 Some(_) => return Err(anyhow!("knowledge record {} exists with different content",record.id)),
                 None => knowledge.insert(&record)
                     .with_context(||format!("persisting accepted learning proposal {proposal_id}"))?,
@@ -450,6 +475,28 @@ mod tests {
         assert_eq!(visible.len(),1);
         assert_eq!(visible[0].proposal_id,"alice-proposal");
         assert!(queue.pending_for_project("aria-org:org-c",10).unwrap().is_empty());
+    }
+
+
+    #[test]
+    fn outbox_persistence_is_tenant_scoped() {
+        let mut queue=LearningQueue::in_memory().unwrap();
+        let mut knowledge=super::super::KnowledgeStore::in_memory().unwrap();
+        for (id,org) in [("tenant-a","org-a"),("tenant-b","org-b")] {
+            let mut item=proposal(id);
+            item.record.project_ids=vec![format!("aria-org:{org}")];
+            queue.propose(&item).unwrap();
+            queue.review(&ReviewReceipt {
+                proposal_id:id.into(),decision:ReviewDecision::Accepted,
+                reviewer_id:"reviewer".into(),reviewed_at:Utc::now(),notes:"approved".into(),
+            }).unwrap();
+        }
+        assert_eq!(queue.persist_pending_for_project(&mut knowledge,"aria-org:org-a",10).unwrap(),1);
+        assert!(knowledge.get_raw_for_persistence("knowledge:tenant-a").unwrap().is_some());
+        assert!(knowledge.get_raw_for_persistence("knowledge:tenant-b").unwrap().is_none());
+        assert_eq!(queue.pending_persistence(10).unwrap(),1);
+        assert_eq!(queue.persist_pending_for_project(&mut knowledge,"aria-org:org-b",10).unwrap(),1);
+        assert_eq!(queue.pending_persistence(10).unwrap(),0);
     }
 
 
