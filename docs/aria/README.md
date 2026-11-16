@@ -61,11 +61,14 @@ Implemented first slices:
 - Scoped chunk search that returns source-cited passages with original artifact hashes and byte ranges; retrieved passages can be converted directly into unverified learning proposals.
 - Explainable Multicolored Hat keyword suggestions in `janus-core/src/aria/classification.rs`, including matched-term explanations and Rainbow cross-domain suggestions. These are advisory, not calibrated confidence or authorization.
 - A durable human-review proposal queue in `janus-core/src/aria/learning.rs`. Proposals must cite the exact source artifact and hash; acceptance produces a `Reviewed` record, never an automatically `Verified` one.
-- Immutable accept/reject review receipts with reviewer identity, timestamp and notes.
-- A separate explicit personal-memory store in `janus-core/src/aria/memory.rs`, with owner-scoped reads/writes, corrections, expiry, search and forget behavior.
-- Unified library retrieval across knowledge records, source-cited artifact passages and the authenticated owner's personal memories in `janus-core/src/aria/retrieval.rs`. Forget removes content and historical content digests while retaining minimal audit metadata.
+- Immutable accept/reject review receipts with reviewer identity, timestamp and notes, plus a recoverable, organization-scoped persistence outbox.
+- An explainable Multicolored Hat keyword classifier with matched-term explanations and Rainbow cross-domain suggestions.
+- An owner-scoped plaintext development memory store and an XChaCha20-Poly1305 encrypted production memory store in `janus-core/src/aria/encrypted_memory.rs`.
+- Unified retrieval across public/internal unscoped knowledge, owner-private source passages and the authenticated owner's encrypted personal memories.
+- An owner-approved, read-only OmniVault normalized-snapshot importer in `janus-core/src/aria/omnivault.rs`.
+- Authenticated Janus Runtime API routes for text ingestion, search, learning proposals/review and explicit remember/list/correct/forget operations. Personal-memory endpoints require a separate owner-only key file.
 
-Stage 2 is **not complete**. Standards-complete PDF/DOCX/HTML5 extraction, OCR, authenticated host integration, atomic review-to-knowledge persistence, automatic hat suggestions, chat UI/context assembly and semantic/vector retrieval, evaluation, host-managed encryption, retention/deletion workflows and the live authenticated OmniVault-to-Janus bridge remain to be implemented. The current OmniVault Android gateway is in-process only; the Rust snapshot importer is a contract, not a live cross-app connection. The current HTML helper handles only simple exported pages and is not a full HTML5 parser. The queue is a library component, not an authenticated review API; the host must authorize users and persist accepted records safely.
+Stage 2 is **not complete**. Standards-complete PDF/DOCX/HTML5 extraction and OCR, wiring the authenticated APIs into Aria's chat UI and model context assembly, semantic/vector retrieval, contradiction detection and evaluation, key rotation/recovery and comprehensive retention/backup workflows remain. The learning outbox is recoverable and tenant-scoped but is an at-least-once hand-off across separate SQLite connections, not one cross-database transaction. The current OmniVault Android gateway is in-process only; the Rust snapshot importer is a contract, not a live cross-app connection. The current HTML helper handles simple exported pages and is not a full HTML5 parser. The encrypted memory store requires host-managed key generation, storage, backup and rotation.
 
 See [Memory and Learning System](ARIA_MEMORY_AND_LEARNING.md) for the implementation contract and remaining exit criteria.
 
@@ -87,6 +90,7 @@ The Rust foundation lives in:
 - `janus-core/src/aria/ingestion.rs`
 - `janus-core/src/aria/learning.rs`
 - `janus-core/src/aria/memory.rs`
+- `janus-core/src/aria/encrypted_memory.rs`
 - `janus-core/src/aria/omnivault.rs`
 - `janus-core/src/aria/retrieval.rs`
 
