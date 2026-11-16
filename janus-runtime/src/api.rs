@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, Query, State as AxumState},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::Json,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use janus_core::{
@@ -36,7 +36,7 @@ struct AriaRuntimeStores {
     knowledge: KnowledgeStore,
     ingestion: AriaIngestionStore,
     learning: LearningQueue,
-    memory: MemoryStore,
+    memory: Option<EncryptedMemoryStore>,
 }
 
 impl AriaRuntimeStores {
@@ -44,13 +44,47 @@ impl AriaRuntimeStores {
         if let Some(parent)=path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let memory=load_aria_memory_key()?.map(|key|EncryptedMemoryStore::open(path,&key))
+            .transpose()?;
         Ok(Self {
             knowledge:KnowledgeStore::open(path)?,
             ingestion:AriaIngestionStore::open(path)?,
             learning:LearningQueue::open(path)?,
-            memory:MemoryStore::open(path)?,
+            memory,
         })
     }
+}
+
+fn load_aria_memory_key()->Result<Option<[u8;32]>> {
+    let Some(path)=std::env::var_os("JANUS_ARIA_MEMORY_KEY_FILE") else {
+        return Ok(None);
+    };
+    let path=std::path::PathBuf::from(path);
+    let metadata=std::fs::symlink_metadata(&path)
+        .with_context(||format!("reading Aria memory key metadata at {}",path.display()))?;
+    if !metadata.file_type().is_file() {
+        anyhow::bail!("Aria memory key path must be a regular, non-symlink file");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            anyhow::bail!("Aria memory key file permissions must be owner-only (0600)");
+        }
+    }
+    let encoded=std::fs::read_to_string(&path)
+        .with_context(||format!("reading Aria memory key file at {}",path.display()))?;
+    let encoded=encoded.trim();
+    if encoded.len()!=64 {
+        anyhow::bail!("Aria memory key file must contain exactly 64 hexadecimal characters");
+    }
+    let mut key=[0u8;32];
+    for (index,pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
+        let hex=std::str::from_utf8(pair)?;
+        key[index]=u8::from_str_radix(hex,16)
+            .context("Aria memory key file contains non-hexadecimal data")?;
+    }
+    Ok(Some(key))
 }
 
 #[derive(Deserialize)]
@@ -70,7 +104,16 @@ struct AriaProposalRequest {
 }
 
 #[derive(Deserialize)]
-struct AriaReviewRequest { decision:ReviewDecision, notes:String }
+struct AriaReviewRequest { decision:ReviewDecision, notes:String }\n#[derive(Deserialize)]
+struct AriaMemoryRequest {
+    content:String,
+    #[serde(default)]
+    source_refs:Vec<String>,
+    #[serde(default)]
+    expires_at:Option<chrono::DateTime<chrono::Utc>>,
+}
+
+
 
 #[derive(Serialize, Deserialize)]
 struct HealthResponse {
