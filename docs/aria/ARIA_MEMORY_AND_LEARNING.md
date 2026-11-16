@@ -80,8 +80,10 @@ The runtime now opens a separate Aria SQLite database beside the configured Janu
 - `GET /aria/proposals/pending` — list pending proposals scoped to the authenticated organization; Reviewer or OrganizationAdmin role required.
 - `POST /aria/proposals/{proposal_id}/review` — accept or reject an organization-scoped proposal; Reviewer or OrganizationAdmin role required. Accepted records enter the durable outbox and are persisted to the knowledge store before the endpoint reports success.
 - `POST /aria/learning/persist` — retry durable outbox persistence after an interrupted hand-off; Reviewer or OrganizationAdmin role required.
+- `POST /aria/memory` and `GET /aria/memory` — explicitly save and list only the authenticated user's encrypted personal memories; require the configured memory key file.
+- `POST /aria/memory/{memory_id}/correct` and `DELETE /aria/memory/{memory_id}` — correct or forget only the authenticated user's memory; require the configured memory key file.
 
-Owner and organization identifiers are derived from the authenticated Janus session, never from request fields. Text imports are private by default, and proposal review is an explicit cross-user organization action. The API currently does not expose personal-memory writes, corrections, or deletion because the store still needs encrypted-at-rest support and a dedicated user-consent lifecycle before that surface is safe.
+Owner and organization identifiers are derived from the authenticated Janus session, never from request fields. Text imports are private by default, and proposal review is an explicit cross-user organization action. Personal-memory endpoints are disabled unless the encrypted memory key file is configured. Every write is an explicit endpoint call; the server does not auto-save chat messages.
 
 ## Implemented unified library retrieval
 
@@ -91,7 +93,7 @@ Owner and organization identifiers are derived from the authenticated Janus sess
 - source passages from preserved and access-scoped artifacts, with SHA-256 and byte locators;
 - active personal memories belonging only to the owner ID supplied by the authenticated host.
 
-Results are deterministically sorted by literal query match count. The host supplies independent knowledge and artifact scopes and the authenticated owner ID. This is a library-level retrieval API; it is not yet wired into the Aria chat UI, semantic/vector ranking, or a production identity/session service.
+Results are deterministically sorted by literal query match count. The host supplies independent knowledge and artifact scopes and the authenticated owner ID. The Janus Runtime exposes this through the authenticated `/aria/search` API. It is not yet wired into the scripted Aria chat panel, semantic/vector ranking, or model context assembly.
 
 ## Implemented read-only OmniVault snapshot import contract
 
