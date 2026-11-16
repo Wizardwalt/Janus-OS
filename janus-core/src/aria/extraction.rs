@@ -162,6 +162,7 @@ mod tests {
         assert!(result.text.contains("Voltage & Current"));
         assert!(!result.text.contains("secret"));
         assert!(result.text.contains("V = I"));
+        assert!(result.text.contains('×'));
     }
 
     #[test]
