@@ -58,9 +58,9 @@ Provider adapters receive only the context needed for a task. Aria's stable know
 ## Initial implementation sequence
 
 1. Establish and version the constitution, domain registry, and record schema. **This foundation is represented by this directory.**
-2. Add schema validation and deterministic unit tests.
-3. Implement a local file-backed knowledge store with provenance and versioning.
-4. Add domain-aware keyword retrieval before semantic retrieval.
+2. Add schema validation and deterministic unit tests. **Rust record contracts and invariant checks are implemented in `janus-core::aria`.**
+3. Implement a local durable knowledge store with provenance and versioning. **An initial SQLite-backed append-only store is implemented in `janus-core::aria::store`; it rejects ID overwrites, records supersession links, preserves old versions for audit, and supports case-insensitive search and hat filtering.**
+4. Add scalable indexed retrieval and then semantic retrieval; the current MVP search scans active records and is intended for an initial local knowledge corpus.
 5. Add source-grounded response assembly and contradiction reporting.
 6. Add a provider-neutral model gateway.
 7. Add read-only OmniVault integration and separately permissioned Janus tools.
