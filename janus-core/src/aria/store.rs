@@ -5,6 +5,7 @@
 
 use super::{Hat, KnowledgeRecord};
 use anyhow::{anyhow, Context, Result};
+use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 use std::path::Path;
@@ -48,6 +49,9 @@ impl KnowledgeAccessScope {
     }
 
     fn allows(&self, record: &KnowledgeRecord) -> bool {
+        if record.expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
+            return false;
+        }
         if !self.allowed_handling.contains(&record.handling) { return false; }
         if record.project_ids.is_empty() { return self.include_unscoped; }
         record.project_ids.iter().any(|id| self.allowed_projects.contains(id))
@@ -297,6 +301,21 @@ mod tests {
         assert!(store.get_with_scope("janus-private", false, &scope).unwrap().is_some());
         assert!(store.get_with_scope("vault-private", false, &scope).unwrap().is_none());
         assert_eq!(store.search_with_scope("", None, 10, &scope).unwrap().len(), 1);
+    }
+
+
+    #[test]
+    fn expired_records_are_not_returned_even_with_explicit_project_scope() {
+        let mut store = KnowledgeStore::in_memory().unwrap();
+        let mut expired = record("expired", "Expired note", "No longer current", vec![Hat::White]);
+        expired.handling = "private".into();
+        expired.project_ids = vec!["janus".into()];
+        expired.expires_at = Some(Utc::now() - chrono::Duration::seconds(1));
+        store.insert(&expired).unwrap();
+
+        let scope = KnowledgeAccessScope::host_authorized(&["private"], &["janus"], false);
+        assert!(store.get_with_scope("expired", true, &scope).unwrap().is_none());
+        assert!(store.search_with_scope("", None, 10, &scope).unwrap().is_empty());
     }
 
     #[test]
