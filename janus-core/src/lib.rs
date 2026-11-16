@@ -6,6 +6,7 @@
 //! This crate is the single source of truth for all cross-crate data structures
 //! and enables strong type safety across the distributed Janus ecosystem.
 
+pub mod aria;
 pub mod audit;
 pub mod authorization;
 pub mod capabilities;
