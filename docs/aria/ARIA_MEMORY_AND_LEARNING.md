@@ -64,6 +64,16 @@ The queue is a library component, not an authenticated API. Hosts must enforce u
 
 The owner ID is an authorization input supplied by the host, not proof of identity. The host must authenticate the user before calling the store. This library component is not yet connected to the ARIA chat API or user interface. SQLite contents are not encrypted by this component; production hosts must provide OS/database encryption and protected key management before storing sensitive personal memories.
 
+## Implemented unified library retrieval
+
+`janus_core::aria::retrieval::search_all` combines results from:
+
+- active knowledge records (including their stored provenance);
+- source passages from preserved and access-scoped artifacts, with SHA-256 and byte locators;
+- active personal memories belonging only to the owner ID supplied by the authenticated host.
+
+Results are deterministically sorted by literal query match count. The host supplies independent knowledge and artifact scopes and the authenticated owner ID. This is a library-level retrieval API; it is not yet wired into the Aria chat UI, semantic/vector ranking, or a production identity/session service.
+
 ## Implemented read-only OmniVault snapshot import contract
 
 `janus_core::aria::omnivault` accepts a normalized conversation snapshot supplied by a host after explicit user approval:
