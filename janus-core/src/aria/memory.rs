@@ -187,6 +187,19 @@ impl MemoryStore {
         Ok(result)
     }
 
+
+    /// Search only the authenticated owner's active memories.
+    pub fn search(&self, owner_id: &str, query: &str, at: DateTime<Utc>, limit: usize) -> Result<Vec<PersonalMemory>> {
+        if limit == 0 { return Ok(Vec::new()); }
+        let needle=query.trim().to_lowercase();
+        let memories=self.list(owner_id,at,limit.saturating_mul(4).max(limit))?;
+        Ok(memories.into_iter().filter(|memory| {
+            needle.is_empty()
+                || memory.content.to_lowercase().contains(&needle)
+                || memory.source_refs.iter().any(|source|source.to_lowercase().contains(&needle))
+        }).take(limit).collect())
+    }
+
     pub fn audit_events(&self, owner_id: &str, memory_id: &str) -> Result<Vec<MemoryAuditEvent>> {
         let mut stmt=self.connection.prepare(
             "SELECT event_type,occurred_at,prior_content_sha256 FROM aria_memory_audit
