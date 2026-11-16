@@ -470,8 +470,8 @@ async fn aria_pending(
     }
     match state.aria.lock() {
         Ok(stores)=>{
-            let owner_project=format!("aria-owner:{}",account.id);
-            match stores.learning.pending_for_project(&owner_project,100) {
+            let org_project=format!("aria-org:{}",account.organization_id);
+            match stores.learning.pending_for_project(&org_project,100) {
                 Ok(items)=>(StatusCode::OK,Json(ApiResponse {status:"success".into(),data:Some(items),error:None})),
                 Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
             }
@@ -498,7 +498,7 @@ async fn aria_review(
             status:"error".into(),data:None,error:Some("Aria store lock is unavailable".into())
         })),
     };
-    let owner_project=format!("aria-owner:{}",account.id);
+    let org_project=format!("aria-org:{}",account.organization_id);
     let proposal=match stores.learning.get_proposal(&proposal_id) {
         Ok(Some(proposal))=>proposal,
         Ok(None)=>return (StatusCode::NOT_FOUND,Json(ApiResponse {
@@ -508,7 +508,7 @@ async fn aria_review(
             status:"error".into(),data:None,error:Some(error.to_string())
         })),
     };
-    if !proposal.record.project_ids.contains(&owner_project) {
+    if !proposal.record.project_ids.contains(&org_project) {
         return (StatusCode::NOT_FOUND,Json(ApiResponse {
             status:"error".into(),data:None,error:Some("learning proposal not found".into())
         }));
