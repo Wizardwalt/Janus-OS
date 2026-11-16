@@ -67,7 +67,10 @@ pub fn import_approved_snapshot(
     if !parsed.is_object() {
         return Err(anyhow!("OmniVault source snapshot must be a JSON object"));
     }
-    if parsed.get("id").and_then(serde_json::Value::as_str) != Some(snapshot.id.as_str()) {
+    let source_id = parsed.get("id").and_then(serde_json::Value::as_str)
+        .or_else(|| parsed.get("evaluation").and_then(|value|value.get("id"))
+            .and_then(serde_json::Value::as_str));
+    if source_id != Some(snapshot.id.as_str()) {
         return Err(anyhow!("OmniVault source snapshot ID does not match the approved conversation"));
     }
     let digest = format!("{:x}",Sha256::digest(snapshot.source_json.as_bytes()));
