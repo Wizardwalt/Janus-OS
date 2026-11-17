@@ -146,6 +146,50 @@ mod tests {
     }
 
     #[test]
+    fn unified_search_orders_equal_score_personal_hits_deterministically() {
+        let knowledge = KnowledgeStore::in_memory().unwrap();
+        let artifacts = AriaIngestionStore::in_memory().unwrap();
+        let mut personal = MemoryStore::in_memory().unwrap();
+        let now = Utc::now();
+
+        for memory_id in ["memory-b", "memory-a"] {
+            personal.remember(&PersonalMemory {
+                memory_id: memory_id.into(),
+                owner_id: "alice".into(),
+                content: "diode reference".into(),
+                source_refs: vec![format!("conversation:{memory_id}")],
+                created_at: now,
+                updated_at: now,
+                expires_at: None,
+                version: 1,
+            }).unwrap();
+        }
+
+        let hits = search_all(
+            &knowledge,
+            &artifacts,
+            Some(&personal),
+            "diode",
+            "alice",
+            &KnowledgeAccessScope::public_internal(),
+            &IngestionAccessScope::public_internal(),
+            now,
+            10,
+        ).unwrap();
+        let ids: Vec<_> = hits.iter().filter_map(|hit| match hit {
+            UnifiedSearchHit::Personal(memory) => Some(memory.memory_id.as_str()),
+            _ => None,
+        }).collect();
+
+        assert_eq!(ids, vec!["memory-a", "memory-b"]);
+        let refs: Vec<_> = hits.iter().filter_map(|hit| match hit {
+            UnifiedSearchHit::Personal(memory) => memory.source_refs.first().map(String::as_str),
+            _ => None,
+        }).collect();
+        assert_eq!(refs, vec!["conversation:memory-a", "conversation:memory-b"]);
+    }
+
+    #[test]
     fn unified_search_combines_sources_and_keeps_personal_owner_boundary() {
         let mut knowledge=KnowledgeStore::in_memory().unwrap();
         let mut artifacts=AriaIngestionStore::in_memory().unwrap();
