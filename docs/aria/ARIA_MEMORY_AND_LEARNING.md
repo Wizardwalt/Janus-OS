@@ -13,7 +13,7 @@
 - rejects duplicate artifact IDs, invalid UTF-8, invalid classifications, invalid expiry, and invalid chunk parameters;
 - filters expired, private, sensitive, and project-scoped artifacts using a scope supplied by the host.
 
-This is a preservation and text-indexing layer, not a PDF/DOCX/HTML parser. Format-specific extraction adapters are still required. Binary originals can be preserved by a future binary artifact API; this initial text API deliberately rejects invalid UTF-8 rather than corrupting it.
+`AriaIngestionStore::import_binary` also preserves arbitrary non-empty binary originals (including PDF/DOCX source bytes) without decoding, mutating, or inventing text chunks. Its manifest reports zero chunks until a format adapter is added. Both text and binary imports enforce the 32 MiB source ceiling, duplicate-ID rejection, expiry validation, handling classification, project-scope validation, and the same access-controlled hash-verified read path. This is source preservation, not PDF/DOCX parsing: extraction adapters must store derived text separately and retain explicit provenance and source locators.
 
 
 ## Implemented extraction and source-cited retrieval
