@@ -175,7 +175,7 @@ pub fn extract_document(
             "plain_utf8_v1".to_owned(),
             Vec::new(),
         ),
-        "text/html" | "application/xhtml+xml" => (
+        "text/html" => (
             extract_simple_html(std::str::from_utf8(bytes)
                 .map_err(|error| anyhow!("HTML input is not valid UTF-8: {error}"))?)?,
             "simple_html_v1".to_owned(),
@@ -288,6 +288,7 @@ mod tests {
         let limits = ExtractionLimits { max_input_bytes: 4, max_output_bytes: 8 };
         assert!(extract_document(b"12345", "text/plain", limits).is_err());
         assert!(extract_document(b"%PDF", "application/pdf", ExtractionLimits::default()).is_err());
+        assert!(extract_document(b"<p>x</p>", "application/xhtml+xml", ExtractionLimits::default()).is_err());
         assert!(extract_document(b"hello", "text/plain", ExtractionLimits {
             max_input_bytes: 10, max_output_bytes: 4,
         }).is_err());
