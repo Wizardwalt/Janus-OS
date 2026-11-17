@@ -40,6 +40,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # Existing workspace files contain formatting drift. Report it without
+      # hiding the warning or blocking runtime/test verification; clean up in
+      # a focused formatting PR rather than mixing broad churn into this CI fix.
+      - name: Report Rust formatting drift
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy across workspace
+        run: cargo clippy --workspace --all-targets
+
       - name: Cargo check (janus-web)
         run: cargo check --bin janus-web
 
@@ -54,7 +64,7 @@ jobs:
           echo "Checking required web assets..."
           for f in web/index.html web/app.js web/style.css web/aria3d.js web/aria_profile.js web/aria_setup.js; do
             if [ -f "$f" ]; then
-              echo "  OK: $f ($(wc -c < $f) bytes)"
+              echo "  OK: $f ($(wc -c < "$f") bytes)"
             else
               echo "  MISSING: $f" && exit 1
             fi
@@ -77,10 +87,12 @@ jobs:
           echo "Lua modules found: $LUA"
           [ "$LUA" -gt 2000 ] || { echo "Module count too low"; exit 1; }
 
-      - name: Release build
-        run: cargo build --release --bin janus-web
+      - name: Release build (runtime and web)
+        run: cargo build --release --bin janus-runtime --bin janus-web
 
-      - name: Confirm binary exists
+      - name: Confirm both release binaries exist
         run: |
-          ls -lh target/release/janus-web
-          file target/release/janus-web
+          test -x target/release/janus-runtime
+          test -x target/release/janus-web
+          ls -lh target/release/janus-runtime target/release/janus-web
+          file target/release/janus-runtime target/release/janus-web
