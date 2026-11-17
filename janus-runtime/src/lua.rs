@@ -312,6 +312,18 @@ mod tests {
     }
 
     #[test]
+    fn plugin_sandbox_rejects_excessively_nested_result_tables() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let error = sandbox
+            .execute(
+                "local root = {}; local node = root; for i = 1, 66 do local child = {}; node.child = child; node = child end; return root",
+                serde_json::json!({}),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("maximum table nesting depth"));
+    }
+
+    #[test]
     fn plugin_sandbox_rejects_sparse_or_mixed_result_tables() {
         let sandbox = PluginSandbox::new().unwrap();
         let sparse = sandbox
