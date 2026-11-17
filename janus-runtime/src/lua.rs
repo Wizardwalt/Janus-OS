@@ -365,6 +365,20 @@ mod tests {
     }
 
     #[test]
+    fn plugin_sandbox_uses_a_fresh_vm_for_each_execution() {
+        let sandbox = PluginSandbox::new().unwrap();
+        sandbox
+            .execute("private_value = 'must not leak'; return true", serde_json::json!({}))
+            .unwrap();
+
+        let result = sandbox
+            .execute("return { private_value = type(private_value) }", serde_json::json!({}))
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!({"private_value": "nil"}));
+    }
+
+    #[test]
     fn plugin_sandbox_stops_unbounded_instruction_loops() {
         let sandbox = PluginSandbox::new().unwrap();
         let error = sandbox.execute("while true do end", serde_json::json!({})).unwrap_err();
