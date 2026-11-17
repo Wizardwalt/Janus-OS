@@ -55,6 +55,17 @@ fn score(text: &str, query: &str) -> usize {
     text.to_lowercase().match_indices(&needle).count()
 }
 
+/// Stable identity used to break relevance ties across all three stores.
+fn hit_identity(hit: &UnifiedSearchHit) -> String {
+    match hit {
+        UnifiedSearchHit::Knowledge(record) => format!("knowledge:{}", record.id),
+        UnifiedSearchHit::Source(passage) => {
+            format!("source:{}:{:020}", passage.artifact_id, passage.ordinal)
+        }
+        UnifiedSearchHit::Personal(memory) => format!("personal:{}", memory.memory_id),
+    }
+}
+
 /// Search all three stores and return a deterministic relevance-sorted result.
 /// The knowledge and source scopes must be constructed by the authenticated
 /// host. The owner ID must likewise come from authenticated session context.
@@ -85,7 +96,10 @@ pub fn search_all(
             ranked.push((score(&hit_text(&hit),query),hit));
         }
     }
-    ranked.sort_by(|a,b|b.0.cmp(&a.0));
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| hit_identity(&a.1).cmp(&hit_identity(&b.1)))
+    });
     Ok(ranked.into_iter().take(limit).map(|(_,hit)|hit).collect())
 }
 
