@@ -97,6 +97,55 @@ mod tests {
     };
 
     #[test]
+    fn unified_search_excludes_expired_memories_and_preserves_source_references() {
+        let knowledge = KnowledgeStore::in_memory().unwrap();
+        let artifacts = AriaIngestionStore::in_memory().unwrap();
+        let mut personal = MemoryStore::in_memory().unwrap();
+        let now = Utc::now();
+
+        personal.remember(&PersonalMemory {
+            memory_id: "m-active".into(),
+            owner_id: "alice".into(),
+            content: "User prefers offline model operation.".into(),
+            source_refs: vec!["conversation:provider-preferences".into()],
+            created_at: now,
+            updated_at: now,
+            expires_at: Some(now + chrono::Duration::hours(1)),
+            version: 1,
+        }).unwrap();
+        personal.remember(&PersonalMemory {
+            memory_id: "m-expired".into(),
+            owner_id: "alice".into(),
+            content: "Expired offline model preference.".into(),
+            source_refs: vec!["conversation:old-preference".into()],
+            created_at: now - chrono::Duration::days(2),
+            updated_at: now - chrono::Duration::days(2),
+            expires_at: Some(now - chrono::Duration::seconds(1)),
+            version: 1,
+        }).unwrap();
+
+        let hits = search_all(
+            &knowledge,
+            &artifacts,
+            Some(&personal),
+            "offline model",
+            "alice",
+            &KnowledgeAccessScope::public_internal(),
+            &IngestionAccessScope::public_internal(),
+            now,
+            10,
+        ).unwrap();
+
+        let memories: Vec<_> = hits.iter().filter_map(|hit| match hit {
+            UnifiedSearchHit::Personal(memory) => Some(memory),
+            _ => None,
+        }).collect();
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].memory_id, "m-active");
+        assert_eq!(memories[0].source_refs, vec!["conversation:provider-preferences"]);
+    }
+
+    #[test]
     fn unified_search_combines_sources_and_keeps_personal_owner_boundary() {
         let mut knowledge=KnowledgeStore::in_memory().unwrap();
         let mut artifacts=AriaIngestionStore::in_memory().unwrap();
