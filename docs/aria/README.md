@@ -57,7 +57,7 @@ Stage 1 is the foundation, not a claim that every future capability already exis
 Implemented first slices:
 
 - Source-preserving UTF-8 text ingestion in `janus-core/src/aria/ingestion.rs`, retaining exact originals, SHA-256 hashes, deterministic chunks, byte locators, access scopes and expiry.
-- Plain-text validation and conservative simple-HTML extraction in `janus-core/src/aria/extraction.rs`.
+- Plain-text validation, conservative simple-HTML extraction, and a bounded media-type dispatcher with hash provenance, byte ceilings, unsupported-format rejection, and untrusted-content warnings in `janus-core/src/aria/extraction.rs`.
 - Scoped chunk search that returns source-cited passages with original artifact hashes and byte ranges; retrieved passages can be converted directly into unverified learning proposals.
 - Explainable Multicolored Hat keyword suggestions in `janus-core/src/aria/classification.rs`, including matched-term explanations and Rainbow cross-domain suggestions. These are advisory, not calibrated confidence or authorization.
 - A durable human-review proposal queue in `janus-core/src/aria/learning.rs`. Proposals must cite the exact source artifact and hash; acceptance produces a `Reviewed` record, never an automatically `Verified` one.
