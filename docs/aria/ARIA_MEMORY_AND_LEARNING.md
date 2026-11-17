@@ -20,6 +20,7 @@ This is a preservation and text-indexing layer, not a PDF/DOCX/HTML parser. Form
 
 - `extract_plain_text` validates UTF-8 and preserves text exactly.
 - `extract_simple_html` provides conservative extraction for simple exported HTML: strips tags, skips script/style bodies, decodes common/numeric entities, and returns normalized text. It is explicitly not a complete HTML5 parser or a sanitizer.
+- `extract_document` adds a bounded media-type dispatcher for UTF-8 plain text and the simple HTML adapter. It enforces caller-configured input/output byte ceilings, rejects unsupported media types instead of guessing, and returns source/extracted SHA-256 hashes, byte counts, method ID, and explicit HTML limitations. Extracted content is marked in API documentation as untrusted data—not instructions, verified knowledge, or authorization.
 - `AriaIngestionStore::search_chunks` searches extracted chunks within a supplied access scope and returns source passages with artifact ID, SHA-256, title, ordinal, and exact byte offsets.
 - `LearningProposal::from_passage` converts a retrieved passage into an unverified, source-linked proposal without dropping the original artifact hash or locator. The proposal then enters the existing human review queue.
 
