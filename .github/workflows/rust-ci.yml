@@ -40,6 +40,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy across workspace
+        run: cargo clippy --workspace --all-targets
+
       - name: Cargo check (janus-web)
         run: cargo check --bin janus-web
 
@@ -77,8 +83,6 @@ jobs:
           echo "Lua modules found: $LUA"
           [ "$LUA" -gt 2000 ] || { echo "Module count too low"; exit 1; }
 
-      # The documented launcher starts both binaries. A web-only release build
-      # does not prove that the protected runtime can be shipped with it.
       - name: Release build (runtime and web)
         run: cargo build --release --bin janus-runtime --bin janus-web
 
