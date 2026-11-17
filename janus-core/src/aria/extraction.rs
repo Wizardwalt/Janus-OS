@@ -245,6 +245,7 @@ fn decode_entity(entity: &str) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
 
     #[test]
     fn plain_text_is_preserved() {
