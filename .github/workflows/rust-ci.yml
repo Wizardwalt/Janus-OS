@@ -54,7 +54,7 @@ jobs:
           echo "Checking required web assets..."
           for f in web/index.html web/app.js web/style.css web/aria3d.js web/aria_profile.js web/aria_setup.js; do
             if [ -f "$f" ]; then
-              echo "  OK: $f ($(wc -c < $f) bytes)"
+              echo "  OK: $f ($(wc -c < "$f") bytes)"
             else
               echo "  MISSING: $f" && exit 1
             fi
@@ -77,10 +77,14 @@ jobs:
           echo "Lua modules found: $LUA"
           [ "$LUA" -gt 2000 ] || { echo "Module count too low"; exit 1; }
 
-      - name: Release build
-        run: cargo build --release --bin janus-web
+      # The documented launcher starts both binaries. A web-only release build
+      # does not prove that the protected runtime can be shipped with it.
+      - name: Release build (runtime and web)
+        run: cargo build --release --bin janus-runtime --bin janus-web
 
-      - name: Confirm binary exists
+      - name: Confirm both release binaries exist
         run: |
-          ls -lh target/release/janus-web
-          file target/release/janus-web
+          test -x target/release/janus-runtime
+          test -x target/release/janus-web
+          ls -lh target/release/janus-runtime target/release/janus-web
+          file target/release/janus-runtime target/release/janus-web
