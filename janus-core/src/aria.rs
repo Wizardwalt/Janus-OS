@@ -18,7 +18,7 @@ pub mod retrieval;
 pub mod store;
 pub use classification::{suggest_hats, HatSuggestion};
 pub use encrypted_memory::EncryptedMemoryStore;
-pub use extraction::{extract_plain_text, extract_simple_html, ExtractedText};
+pub use extraction::{extract_document, extract_plain_text, extract_simple_html, ExtractedDocument, ExtractedText, ExtractionLimits, ExtractionProvenance};
 pub use ingestion::{ArtifactManifest, AriaIngestionStore, IngestionAccessScope, TextArtifactInput, TextChunk, SourcePassage};
 pub use learning::{LearningProposal, LearningQueue, ReviewDecision, ReviewReceipt, SourceLocator};
 pub use memory::{MemoryAuditEvent, MemoryStore, PersonalMemory};
