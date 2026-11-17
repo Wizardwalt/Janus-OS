@@ -175,6 +175,48 @@ impl AriaIngestionStore {
         })
     }
 
+    /// Preserve an arbitrary binary source exactly without pretending it has
+    /// been extracted. Binary artifacts have no text chunks until a format
+    /// adapter produces derived text with its own provenance and locators.
+    pub fn import_binary(
+        &mut self,
+        input: &TextArtifactInput,
+        original_bytes: &[u8],
+    ) -> Result<ArtifactManifest> {
+        validate_binary_input(input, original_bytes)?;
+        let digest = format!("{:x}", Sha256::digest(original_bytes));
+        let projects = serde_json::to_string(&input.project_ids)?;
+        let expires = input.expires_at.map(|v| v.to_rfc3339());
+        let byte_length = i64::try_from(original_bytes.len())
+            .map_err(|_| anyhow!("artifact too large for SQLite byte-length storage"))?;
+
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "INSERT INTO aria_source_artifacts
+             (artifact_id,title,media_type,source_type,original_bytes,sha256,byte_length,
+              handling,project_ids_json,imported_at,expires_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![input.artifact_id,input.title,input.media_type,input.source_type,
+                original_bytes,digest,byte_length,input.handling,projects,
+                input.imported_at.to_rfc3339(),expires],
+        ).with_context(|| format!("preserving binary source artifact {}", input.artifact_id))?;
+        tx.commit().context("committing binary source artifact")?;
+
+        Ok(ArtifactManifest {
+            artifact_id: input.artifact_id.clone(),
+            title: input.title.clone(),
+            media_type: input.media_type.clone(),
+            source_type: input.source_type.clone(),
+            sha256: digest,
+            byte_length: original_bytes.len() as u64,
+            handling: input.handling.clone(),
+            project_ids: input.project_ids.clone(),
+            imported_at: input.imported_at,
+            expires_at: input.expires_at,
+            chunk_count: 0,
+        })
+    }
+
     pub fn original_bytes(&self, id: &str, scope: &IngestionAccessScope) -> Result<Option<Vec<u8>>> {
         let row: Option<(Vec<u8>,String,String,Option<String>,String)> = self.connection.query_row(
             "SELECT original_bytes,handling,project_ids_json,expires_at,sha256
@@ -270,6 +312,44 @@ fn parse_expiry(value: Option<String>) -> Result<Option<DateTime<Utc>>> {
         .map(|d| d.with_timezone(&Utc)).context("parsing artifact expiry")).transpose()
 }
 
+fn validate_binary_input(input: &TextArtifactInput, bytes: &[u8]) -> Result<()> {
+    for (name, value) in [
+        ("artifact_id", &input.artifact_id),
+        ("title", &input.title),
+        ("media_type", &input.media_type),
+        ("source_type", &input.source_type),
+    ] {
+        if value.trim().is_empty() {
+            return Err(anyhow!("{name} must not be empty"));
+        }
+    }
+    if !matches!(input.handling.as_str(), "public" | "internal" | "private" | "sensitive") {
+        return Err(anyhow!("invalid handling classification"));
+    }
+    if input.artifact_id.len() > 200 || input.title.len() > 500
+        || input.media_type.len() > 200 || input.source_type.len() > 100 {
+        return Err(anyhow!("artifact metadata exceeds supported length limits"));
+    }
+    if input.project_ids.iter().any(|id| id.trim().is_empty() || id.len() > 160) {
+        return Err(anyhow!("project IDs must be non-empty and at most 160 bytes"));
+    }
+    let unique: HashSet<_> = input.project_ids.iter().collect();
+    if unique.len() != input.project_ids.len() {
+        return Err(anyhow!("duplicate project IDs"));
+    }
+    if bytes.is_empty() {
+        return Err(anyhow!("source artifact must not be empty"));
+    }
+    const MAX_ARTIFACT_BYTES: usize = 32 * 1024 * 1024;
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err(anyhow!("binary artifact exceeds the 32 MiB ingestion limit"));
+    }
+    if input.expires_at.is_some_and(|v| v <= input.imported_at) {
+        return Err(anyhow!("expires_at must be later than imported_at"));
+    }
+    Ok(())
+}
+
 fn validate_input(input: &TextArtifactInput, bytes: &[u8], max: usize, overlap: usize) -> Result<()> {
     for (name,value) in [("artifact_id",&input.artifact_id),("title",&input.title),
         ("media_type",&input.media_type),("source_type",&input.source_type)] {
@@ -345,6 +425,35 @@ mod tests {
         let scope=IngestionAccessScope::host_authorized(&["internal"],&["janus"],false);
         assert_eq!(store.original_bytes("manual",&scope).unwrap().unwrap(),bytes);
         assert!(!store.chunks("manual",&scope).unwrap().is_empty());
+    }
+
+    #[test]
+    fn binary_import_preserves_non_utf8_bytes_without_creating_text_chunks() {
+        let mut store = AriaIngestionStore::in_memory().unwrap();
+        let bytes = [0x25, 0x50, 0x44, 0x46, 0xff, 0x00];
+        let mut item = input("binary-pdf");
+        item.media_type = "application/pdf".into();
+        let manifest = store.import_binary(&item, &bytes).unwrap();
+        assert_eq!(manifest.sha256, format!("{:x}", Sha256::digest(bytes)));
+        assert_eq!(manifest.byte_length, bytes.len() as u64);
+        assert_eq!(manifest.chunk_count, 0);
+        let scope = IngestionAccessScope::host_authorized(&["internal"], &["janus"], false);
+        assert_eq!(store.original_bytes("binary-pdf", &scope).unwrap().unwrap(), bytes);
+        assert!(store.chunks("binary-pdf", &scope).unwrap().is_empty());
+    }
+
+    #[test]
+    fn binary_import_obeys_scope_and_rejects_duplicate_ids() {
+        let mut store = AriaIngestionStore::in_memory().unwrap();
+        let mut item = input("private-binary");
+        item.handling = "private".into();
+        let bytes = [0, 0xff, 0x80, 1];
+        store.import_binary(&item, &bytes).unwrap();
+        assert!(store.original_bytes("private-binary", &IngestionAccessScope::public_internal())
+            .unwrap().is_none());
+        let allowed = IngestionAccessScope::host_authorized(&["private"], &["janus"], false);
+        assert_eq!(store.original_bytes("private-binary", &allowed).unwrap().unwrap(), bytes);
+        assert!(store.import_binary(&item, b"replacement").is_err());
     }
 
     #[test]
