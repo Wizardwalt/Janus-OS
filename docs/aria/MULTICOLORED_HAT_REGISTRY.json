@@ -1,0 +1,183 @@
+{
+  "schema_version": "1.0.0",
+  "principle": "One connected knowledge base; colors are retrieval lenses, not isolated silos or permission levels.",
+  "hats": [
+    {
+      "id": "red",
+      "name": "Red Hat",
+      "color": "#E53935",
+      "purpose": "Electronics and hardware",
+      "domains": [
+        "electronics",
+        "circuit_design",
+        "embedded_systems",
+        "microcontrollers",
+        "sensors",
+        "device_diagnostics",
+        "mobile_device_repair",
+        "hardware_architecture"
+      ],
+      "boundary": "Repair and diagnostics must respect ownership, safety, and device protections."
+    },
+    {
+      "id": "orange",
+      "name": "Orange Hat",
+      "color": "#FB8C00",
+      "purpose": "Creativity and expression",
+      "domains": [
+        "visual_art",
+        "image_design",
+        "music",
+        "audio",
+        "writing",
+        "storytelling",
+        "product_design",
+        "creative_ideation"
+      ],
+      "boundary": "Respect consent, attribution, and applicable intellectual-property constraints."
+    },
+    {
+      "id": "yellow",
+      "name": "Yellow Hat",
+      "color": "#FDD835",
+      "purpose": "Science, mathematics, and learning",
+      "domains": [
+        "mathematics",
+        "physics",
+        "chemistry",
+        "biology",
+        "statistics",
+        "scientific_method",
+        "education",
+        "research_methods"
+      ],
+      "boundary": "Distinguish established evidence, hypotheses, estimates, and open questions."
+    },
+    {
+      "id": "green",
+      "name": "Green Hat",
+      "color": "#43A047",
+      "purpose": "Software, programming, and AI",
+      "domains": [
+        "programming",
+        "software_engineering",
+        "algorithms",
+        "databases",
+        "artificial_intelligence",
+        "machine_learning",
+        "developer_tooling",
+        "testing"
+      ],
+      "boundary": "Generated code must be reviewed and tested; execution requires separate authorization."
+    },
+    {
+      "id": "blue",
+      "name": "Blue Hat",
+      "color": "#1E88E5",
+      "purpose": "Computing and infrastructure",
+      "domains": [
+        "operating_systems",
+        "computer_architecture",
+        "networking",
+        "cloud_infrastructure",
+        "telecommunications",
+        "systems_administration",
+        "storage",
+        "interoperability"
+      ],
+      "boundary": "Network and infrastructure operations must use authorized assets and scoped access."
+    },
+    {
+      "id": "purple",
+      "name": "Purple Hat",
+      "color": "#8E24AA",
+      "purpose": "Cybersecurity and digital investigation",
+      "domains": [
+        "defensive_security",
+        "secure_architecture",
+        "threat_modeling",
+        "digital_forensics",
+        "incident_response",
+        "vulnerability_management",
+        "authorized_security_testing",
+        "privacy_engineering"
+      ],
+      "boundary": "Keep assistance authorized, defensive, and bounded; do not infer permission from technical access."
+    },
+    {
+      "id": "black",
+      "name": "Black Hat",
+      "color": "#212121",
+      "purpose": "Critical thinking, risk, and failure analysis",
+      "domains": [
+        "critical_thinking",
+        "risk_analysis",
+        "failure_analysis",
+        "troubleshooting",
+        "reliability_engineering",
+        "safety_analysis",
+        "adversarial_review",
+        "decision_analysis"
+      ],
+      "boundary": "Use adversarial thinking to identify and reduce risk, not to enable harm."
+    },
+    {
+      "id": "white",
+      "name": "White Hat",
+      "color": "#F5F5F5",
+      "purpose": "Evidence, facts, documentation, and provenance",
+      "domains": [
+        "source_verification",
+        "technical_documentation",
+        "standards",
+        "citations",
+        "data_quality",
+        "measurement",
+        "version_history",
+        "epistemic_status"
+      ],
+      "boundary": "Track where claims came from; never upgrade unsupported claims to verified facts."
+    },
+    {
+      "id": "brown",
+      "name": "Brown Hat",
+      "color": "#795548",
+      "purpose": "Practical, mechanical, and everyday skills",
+      "domains": [
+        "mechanical_systems",
+        "bicycles",
+        "automotive_basics",
+        "fabrication",
+        "tools_and_workshop",
+        "maintenance",
+        "home_repair",
+        "practical_life_skills"
+      ],
+      "boundary": "Flag physical hazards and recommend qualified help where the risk exceeds safe guidance."
+    },
+    {
+      "id": "rainbow",
+      "name": "Rainbow Hat",
+      "color": "multicolor",
+      "purpose": "Interdisciplinary synthesis and coordination",
+      "domains": [
+        "cross_domain_reasoning",
+        "systems_thinking",
+        "project_planning",
+        "tradeoff_analysis",
+        "knowledge_graphs",
+        "complex_problem_solving"
+      ],
+      "boundary": "Show which domains contributed, surface conflicting evidence, and do not hide uncertainty in a blended answer."
+    }
+  ],
+  "routing_rules": [
+    "Assign one primary hat and any materially relevant secondary hats to each knowledge item.",
+    "Do not force every item into exactly one domain.",
+    "White Hat provenance and epistemic metadata apply across all hats.",
+    "Use Rainbow Hat when a task genuinely combines domains; it coordinates retrieval rather than replacing source domains.",
+    "A hat classification never grants tool permissions or execution authority.",
+    "Preserve the original source and link all extracted or normalized records to it.",
+    "When evidence conflicts, preserve both records and mark the conflict for review rather than silently choosing one."
+  ]
+}
