@@ -339,6 +339,42 @@ mod tests {
     }
 
     #[test]
+    fn recovery_clears_only_present_trust_tables_and_preserves_other_data() {
+        let source = path("partial-trust-src");
+        let encrypted = path("partial-trust-enc");
+        let restored = path("partial-trust-restored");
+        {
+            let db = Connection::open(&source).unwrap();
+            // Older or partially migrated databases may not contain every optional trust table.
+            db.execute_batch(
+                "CREATE TABLE sessions(token_hash TEXT PRIMARY KEY);
+                 CREATE TABLE application_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            )
+            .unwrap();
+            db.execute("INSERT INTO sessions VALUES ('old-session')", []).unwrap();
+            db.execute("INSERT INTO application_state VALUES ('theme', 'dark')", []).unwrap();
+        }
+
+        create_encrypted_backup(&source, &encrypted, &[4u8; 32]).unwrap();
+        restore_encrypted_backup(&encrypted, &restored, &[4u8; 32]).unwrap();
+
+        let db = Connection::open(&restored).unwrap();
+        let sessions: i64 = db.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0)).unwrap();
+        let theme: String = db.query_row(
+            "SELECT value FROM application_state WHERE key='theme'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(sessions, 0, "existing sessions must be invalidated");
+        assert_eq!(theme, "dark", "unrelated application data must survive recovery");
+
+        drop(db);
+        for file in [source, encrypted, restored] {
+            let _ = fs::remove_file(file);
+        }
+    }
+
+    #[test]
     fn missing_source_database_is_not_silently_created() {
         let source = path("missing-source");
         let backup = path("missing-backup");
