@@ -90,18 +90,24 @@ impl PluginExecutor {
         plugin_name: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        debug!(plugin_name, ?args, "Executing plugin");
+        // Plugin arguments can contain user data or secrets; never include them in logs.
+        debug!(plugin_name, "Executing plugin");
 
-        if let Some(plugin) = self.loader.get(plugin_name) {
-            // Manifest declarations are requests, never grants. Until a capability
-            // has a vetted host implementation and an explicit grant path, deny it.
-            validate_plugin_capabilities(&plugin.manifest.capabilities)?;
+        let plugin = self.loader.get(plugin_name)
+            .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", plugin_name))?;
+        // Manifest declarations are requests, never grants. Until a capability
+        // has a vetted host implementation and an explicit grant path, deny it.
+        validate_plugin_capabilities(&plugin.manifest.capabilities)?;
+
+        // Lua execution is synchronous and CPU-bound. Keep it off Tokio's async
+        // worker threads; this is scheduling isolation, not an OS security boundary.
+        let code = plugin.code.clone();
+        tokio::task::spawn_blocking(move || {
             let sandbox = crate::lua::PluginSandbox::new()?;
-            let result = sandbox.execute(&plugin.code, args)?;
-            Ok(result)
-        } else {
-            Err(anyhow::anyhow!("Plugin not found: {}", plugin_name))
-        }
+            sandbox.execute(&code, args)
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("plugin execution worker failed: {error}"))?
     }
 
     /// Get plugin count
