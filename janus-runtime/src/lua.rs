@@ -64,6 +64,14 @@ impl PluginSandbox {
         // monopolize a Tokio worker thread indefinitely.
         const INSTRUCTION_HOOK_INTERVAL: u32 = 1_000;
         const MAX_INSTRUCTIONS: u32 = 100_000;
+        const MAX_INPUT_BYTES: usize = 256 * 1024;
+        const MAX_OUTPUT_BYTES: usize = 256 * 1024;
+
+        let input_bytes = serde_json::to_vec(&args)?;
+        anyhow::ensure!(
+            input_bytes.len() <= MAX_INPUT_BYTES,
+            "plugin input exceeds the 256 KiB limit"
+        );
         let lua = Lua::new();
 
         // Explicitly remove ambient loaders and process/debug libraries even if
@@ -128,7 +136,13 @@ impl PluginSandbox {
         lua.globals().set("janus", janus)?;
 
         let value = lua.load(code).eval::<LuaValue>()?;
-        lua_value_to_json(&value)
+        let result = lua_value_to_json(&value)?;
+        let output_bytes = serde_json::to_vec(&result)?;
+        anyhow::ensure!(
+            output_bytes.len() <= MAX_OUTPUT_BYTES,
+            "plugin output exceeds the 256 KiB limit"
+        );
+        Ok(result)
     }
 }
 
@@ -240,6 +254,23 @@ fn lua_value_to_json_at_depth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_sandbox_rejects_oversized_json_input() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let args = serde_json::json!({ "payload": "x".repeat(256 * 1024) });
+        let error = sandbox.execute("return true", args).unwrap_err();
+        assert!(error.to_string().contains("input exceeds the 256 KiB limit"));
+    }
+
+    #[test]
+    fn plugin_sandbox_rejects_oversized_json_output() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let error = sandbox
+            .execute("return { payload = string.rep('x', 256 * 1024) }", serde_json::json!({}))
+            .unwrap_err();
+        assert!(error.to_string().contains("output exceeds the 256 KiB limit"));
+    }
 
     #[test]
     fn plugin_sandbox_returns_lua_values() {
