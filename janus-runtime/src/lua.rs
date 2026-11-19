@@ -7,7 +7,7 @@
 use anyhow::Result;
 use mlua::prelude::*;
 use mlua::HookTriggers;
-use std::{path::Path, sync::{atomic::{AtomicU32, Ordering}, Arc}};
+use std::{path::Path, sync::{atomic::{AtomicBool, AtomicU32, Ordering}, Arc}};
 use tracing::{debug, error, warn};
 
 const MAX_CORE_LUA_MEMORY_BYTES: usize = 32 * 1024 * 1024;
@@ -31,6 +31,7 @@ impl LuaEnv {
             MAX_CORE_LUA_INSTRUCTIONS,
             LUA_INSTRUCTION_HOOK_INTERVAL,
             "core module instruction limit exceeded",
+            None,
         )?;
         // These globals can catch instruction-hook errors or create child
         // threads without inheriting the current-thread hook.
@@ -86,12 +87,16 @@ fn install_instruction_budget(
     max_instructions: u32,
     interval: u32,
     error_message: &'static str,
+    cancelled: Option<Arc<AtomicBool>>,
 ) -> Result<Arc<AtomicU32>> {
     let remaining = Arc::new(AtomicU32::new(max_instructions));
     let hook_remaining = Arc::clone(&remaining);
     lua.set_hook(
         HookTriggers::new().every_nth_instruction(interval),
         move |_, _| {
+            if cancelled.as_ref().is_some_and(|flag| flag.load(Ordering::Acquire)) {
+                return Err(LuaError::RuntimeError("plugin execution cancelled".to_string()));
+            }
             let mut current = hook_remaining.load(Ordering::Relaxed);
             loop {
                 if current < interval {
@@ -128,6 +133,17 @@ impl PluginSandbox {
     /// the global `args` table. No host filesystem, shell, or hardware APIs are
     /// registered here; production handlers must provide vetted capabilities.
     pub fn execute(&self, code: &str, args: serde_json::Value) -> Result<serde_json::Value> {
+        self.execute_with_cancellation(code, args, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Execute with a cooperative cancellation flag checked by the Lua instruction hook.
+    /// This releases a timed-out worker at the next hook; it is not an OS process boundary.
+    pub fn execute_with_cancellation(
+        &self,
+        code: &str,
+        args: serde_json::Value,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<serde_json::Value> {
         // Bound CPU work so an accidental or hostile infinite loop cannot
         // monopolize a Tokio worker thread indefinitely.
         const INSTRUCTION_HOOK_INTERVAL: u32 = 1_000;
@@ -171,6 +187,7 @@ impl PluginSandbox {
             MAX_INSTRUCTIONS,
             INSTRUCTION_HOOK_INTERVAL,
             "plugin instruction limit exceeded",
+            Some(cancelled),
         )?;
         let args_table = json_object_to_table(&lua, &args)?;
         lua.globals().set("args", args_table)?;
@@ -485,5 +502,17 @@ mod tests {
         let sandbox = PluginSandbox::new().unwrap();
         let error = sandbox.execute("while true do end", serde_json::json!({})).unwrap_err();
         assert!(error.to_string().contains("plugin instruction limit exceeded"));
+    }
+
+    #[test]
+    fn plugin_sandbox_observes_cooperative_cancellation() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let error = sandbox.execute_with_cancellation(
+            "while true do end",
+            serde_json::json!({}),
+            cancelled,
+        ).unwrap_err();
+        assert!(error.to_string().contains("plugin execution cancelled"));
     }
 }
