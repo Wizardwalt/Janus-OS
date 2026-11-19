@@ -945,6 +945,12 @@ async fn handle_socket(mut socket: WebSocket, state: GuiState) {
 
 // ─── Production Runtime API Proxy ──────────────────────────────────────────────
 
+fn runtime_proxy_method_allowed(method: &reqwest::Method) -> bool {
+    method == reqwest::Method::GET
+        || method == reqwest::Method::POST
+        || method == reqwest::Method::DELETE
+}
+
 /// Forward browser API requests to the loopback runtime so hosted deployments
 /// do not ask the user's browser to connect to its own localhost.
 async fn runtime_proxy(
@@ -953,7 +959,10 @@ async fn runtime_proxy(
 ) -> Result<Response<Body>, StatusCode> {
     let method = reqwest::Method::from_bytes(request.method().as_str().as_bytes())
         .map_err(|_| StatusCode::METHOD_NOT_ALLOWED)?;
-    if method != reqwest::Method::GET && method != reqwest::Method::POST {
+    if method != reqwest::Method::GET
+        && method != reqwest::Method::POST
+        && method != reqwest::Method::DELETE
+    {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
 
@@ -1068,6 +1077,14 @@ mod aria_tests {
         let response = aria_respond(&message);
         assert!(response.contains("no live system tools"));
         assert!(response.contains(&"🙂".repeat(60)));
+    }
+
+    #[test]
+    fn runtime_proxy_allows_authenticated_delete_requests() {
+        assert!(runtime_proxy_method_allowed(&reqwest::Method::GET));
+        assert!(runtime_proxy_method_allowed(&reqwest::Method::POST));
+        assert!(runtime_proxy_method_allowed(&reqwest::Method::DELETE));
+        assert!(!runtime_proxy_method_allowed(&reqwest::Method::PUT));
     }
 
     #[test]
