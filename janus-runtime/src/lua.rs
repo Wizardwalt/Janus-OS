@@ -7,17 +7,44 @@
 use anyhow::Result;
 use mlua::prelude::*;
 use mlua::HookTriggers;
-use std::{path::Path, sync::atomic::{AtomicU32, Ordering}};
+use std::{path::Path, sync::{atomic::{AtomicU32, Ordering}, Arc}};
 use tracing::{debug, error, warn};
+
+const MAX_CORE_LUA_MEMORY_BYTES: usize = 32 * 1024 * 1024;
+const MAX_CORE_LUA_INSTRUCTIONS: u32 = 500_000;
+const LUA_INSTRUCTION_HOOK_INTERVAL: u32 = 1_000;
 
 /// Runtime used only while core modules are being loaded during startup.
 pub struct LuaEnv {
     lua: Lua,
+    remaining_instructions: Arc<AtomicU32>,
 }
 
 impl LuaEnv {
     pub fn new() -> Result<Self> {
-        Ok(Self { lua: Lua::new() })
+        // Lua::new loads mlua's safe standard-library subset (no OS, IO,
+        // debug, or native C-module loading). Keep startup modules bounded too.
+        let lua = Lua::new();
+        lua.set_memory_limit(MAX_CORE_LUA_MEMORY_BYTES)?;
+        let remaining_instructions = install_instruction_budget(
+            &lua,
+            MAX_CORE_LUA_INSTRUCTIONS,
+            LUA_INSTRUCTION_HOOK_INTERVAL,
+            "core module instruction limit exceeded",
+        )?;
+        // These globals can catch instruction-hook errors or create child
+        // threads without inheriting the current-thread hook.
+        let globals = lua.globals();
+        globals.set("coroutine", LuaValue::Nil)?;
+        globals.set("pcall", LuaValue::Nil)?;
+        globals.set("xpcall", LuaValue::Nil)?;
+        Ok(Self { lua, remaining_instructions })
+    }
+
+    fn execute_core_source(&self, name: &str, source: &str) -> Result<()> {
+        self.remaining_instructions.store(MAX_CORE_LUA_INSTRUCTIONS, Ordering::Relaxed);
+        self.lua.load(source).set_name(name).exec()?;
+        Ok(())
     }
 
     /// Load Lua core files. One invalid file is reported but does not prevent
@@ -38,7 +65,7 @@ impl LuaEnv {
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .unwrap_or("core_module");
-            if let Err(error) = self.lua.load(&source).set_name(name).exec() {
+            if let Err(error) = self.execute_core_source(name, &source) {
                 error!(module = name, %error, "Core Lua module failed to load");
             } else {
                 debug!(module = name, "Loaded core Lua module");
@@ -46,6 +73,34 @@ impl LuaEnv {
         }
         Ok(())
     }
+}
+
+/// Install a non-wrapping instruction budget. The caller must remove pcall/xpcall
+/// from untrusted Lua globals so scripts cannot catch the hook error and continue.
+fn install_instruction_budget(
+    lua: &Lua,
+    max_instructions: u32,
+    interval: u32,
+    error_message: &'static str,
+) -> Result<Arc<AtomicU32>> {
+    let remaining = Arc::new(AtomicU32::new(max_instructions));
+    let hook_remaining = Arc::clone(&remaining);
+    lua.set_hook(
+        HookTriggers::new().every_nth_instruction(interval),
+        move |_, _| {
+            let updated = hook_remaining.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |current| current.checked_sub(interval),
+            );
+            if updated.is_err() {
+                Err(LuaError::RuntimeError(error_message.to_string()))
+            } else {
+                Ok(())
+            }
+        },
+    )?;
+    Ok(remaining)
 }
 
 /// Maximum Lua VM heap per plugin execution. This is a VM allocator limit,
@@ -96,25 +151,18 @@ impl PluginSandbox {
             "loadstring",
             "coroutine",
             "collectgarbage",
+            "pcall",
+            "xpcall",
         ] {
             globals.set(name, LuaValue::Nil)?;
         }
 
-        let remaining_instructions = AtomicU32::new(MAX_INSTRUCTIONS);
-        lua.set_hook(
-            HookTriggers::new().every_nth_instruction(INSTRUCTION_HOOK_INTERVAL),
-            move |_, _| {
-                let remaining = remaining_instructions
-                    .fetch_sub(INSTRUCTION_HOOK_INTERVAL, Ordering::Relaxed);
-                if remaining <= INSTRUCTION_HOOK_INTERVAL {
-                    Err(LuaError::RuntimeError(
-                        "plugin instruction limit exceeded".to_string(),
-                    ))
-                } else {
-                    Ok(())
-                }
-            },
-        );
+        install_instruction_budget(
+            &lua,
+            MAX_INSTRUCTIONS,
+            INSTRUCTION_HOOK_INTERVAL,
+            "plugin instruction limit exceeded",
+        )?;
         let args_table = json_object_to_table(&lua, &args)?;
         lua.globals().set("args", args_table)?;
 
@@ -261,6 +309,33 @@ fn lua_value_to_json_at_depth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn core_lua_excludes_process_filesystem_and_hook_catchers() {
+        let env = LuaEnv::new().unwrap();
+        env.execute_core_source(
+            "safe-core",
+            "assert(os == nil and io == nil and package == nil and debug == nil and coroutine == nil and pcall == nil and xpcall == nil)",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn core_lua_instruction_budget_stops_loops_and_resets_between_modules() {
+        let env = LuaEnv::new().unwrap();
+        let error = env.execute_core_source("loop", "while true do end").unwrap_err();
+        assert!(error.to_string().contains("core module instruction limit exceeded"));
+        env.execute_core_source("next-module", "return true").unwrap();
+    }
+
+    #[test]
+    fn core_lua_enforces_a_hard_heap_limit() {
+        let env = LuaEnv::new().unwrap();
+        let error = env
+            .execute_core_source("heap", "return string.rep('x', 64 * 1024 * 1024)")
+            .unwrap_err();
+        assert!(error.to_string().to_lowercase().contains("memory"));
+    }
 
     #[test]
     fn plugin_sandbox_rejects_oversized_json_input() {
