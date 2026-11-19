@@ -229,8 +229,9 @@ fn migrate_event_identity_scope(connection: &mut Connection) -> Result<()> {
         .into_iter()
         .map(|(_, name)| name)
         .collect::<Vec<_>>();
+    drop(statement);
 
-    if primary_key_columns == ["event_id"] {
+    if primary_key_columns.len() == 1 && primary_key_columns[0] == "event_id" {
         let tx = connection.transaction()?;
         tx.execute_batch(
             "DROP INDEX IF EXISTS idx_aria_conversation_events_owner_time;
@@ -258,7 +259,10 @@ fn migrate_event_identity_scope(connection: &mut Connection) -> Result<()> {
                 ON aria_conversation_events(owner_id, conversation_id, created_at, event_id);",
         )?;
         tx.commit()?;
-    } else if primary_key_columns != ["owner_id", "event_id"] {
+    } else if primary_key_columns.len() != 2
+        || primary_key_columns[0] != "owner_id"
+        || primary_key_columns[1] != "event_id"
+    {
         anyhow::bail!(
             "unsupported aria_conversation_events primary key: {primary_key_columns:?}"
         );
