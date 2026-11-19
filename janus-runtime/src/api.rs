@@ -138,6 +138,15 @@ struct AriaChatRequest {
 }
 
 #[derive(Serialize)]
+struct AriaProviderStatus {
+    provider_configured: bool,
+    provider_name: Option<String>,
+    model: Option<String>,
+    encrypted_history_available: bool,
+    private_context_available: bool,
+}
+
+#[derive(Serialize)]
 struct AriaChatResponse {
     conversation_id: String,
     user_event_id: String,
@@ -381,6 +390,7 @@ impl ApiServer {
         let app = Router::new()
             .route("/aria/artifacts/text", post(aria_import_text))
             .route("/aria/search", get(aria_search))
+            .route("/aria/status", get(aria_status))
             .route("/aria/chat", post(aria_chat))
             .route("/aria/conversations", get(aria_conversation_list))
             .route(
@@ -528,6 +538,32 @@ async fn aria_search(
     }
 }
 
+
+async fn aria_status(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<AriaProviderStatus>>) {
+    let _account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account,
+        Err(error) => return unauthorized_response(error),
+    };
+    let (encrypted_history_available, private_context_available) = match state.aria.lock() {
+        Ok(stores) => (stores.conversations.is_some(), stores.memory.is_some()),
+        Err(_) => return aria_store_lock_unavailable(),
+    };
+    let provider = state.aria_provider.as_ref();
+    (StatusCode::OK, Json(ApiResponse {
+        status: "success".into(),
+        data: Some(AriaProviderStatus {
+            provider_configured: provider.is_some(),
+            provider_name: provider.map(|provider| provider.provider_name().to_string()),
+            model: provider.map(|provider| provider.model().to_string()),
+            encrypted_history_available,
+            private_context_available,
+        }),
+        error: None,
+    }))
+}
 
 async fn aria_chat(
     AxumState(state): AxumState<ApiState>,
