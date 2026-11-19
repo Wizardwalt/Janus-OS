@@ -433,7 +433,7 @@ mod tests {
         let sandbox = PluginSandbox::new().unwrap();
         let result = sandbox
             .execute(
-                "return { os = type(os), io = type(io), package = type(package), debug = type(debug), require = type(require), dofile = type(dofile), loadfile = type(loadfile), load = type(load), loadstring = type(loadstring), coroutine = type(coroutine), collectgarbage = type(collectgarbage) }",
+                "return { os = type(os), io = type(io), package = type(package), debug = type(debug), require = type(require), dofile = type(dofile), loadfile = type(loadfile), load = type(load), loadstring = type(loadstring), coroutine = type(coroutine), collectgarbage = type(collectgarbage), pcall = type(pcall), xpcall = type(xpcall) }",
                 serde_json::json!({}),
             )
             .unwrap();
@@ -450,7 +450,9 @@ mod tests {
                 "load": "nil",
                 "loadstring": "nil",
                 "coroutine": "nil",
-                "collectgarbage": "nil"
+                "collectgarbage": "nil",
+                "pcall": "nil",
+                "xpcall": "nil"
             })
         );
     }
