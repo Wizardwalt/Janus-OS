@@ -4,7 +4,11 @@ use crate::plugin::PluginLoader;
 use anyhow::Result;
 use janus_core::Config;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{atomic::{AtomicBool, Ordering}, Arc},
+    time::Duration,
+};
 use tracing::debug;
 
 /// Safe plugin metadata returned to authenticated API clients.
@@ -34,6 +38,15 @@ fn validate_plugin_capabilities(requested: &[String]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Drop guard ensures a disconnected/cancelled API request signals its blocking worker.
+struct PluginCancellationGuard(Arc<AtomicBool>);
+
+impl Drop for PluginCancellationGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
 }
 
 /// Plugin executor managing Lua runtime and plugin lifecycle.
@@ -100,14 +113,42 @@ impl PluginExecutor {
         validate_plugin_capabilities(&plugin.manifest.capabilities)?;
 
         // Lua execution is synchronous and CPU-bound. Keep it off Tokio's async
-        // worker threads; this is scheduling isolation, not an OS security boundary.
+        // worker threads and signal cooperative cancellation on timeout or request
+        // cancellation. This is still not an OS process/security boundary.
         let code = plugin.code.clone();
-        tokio::task::spawn_blocking(move || {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let _cancellation_guard = PluginCancellationGuard(Arc::clone(&cancelled));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let mut worker = tokio::task::spawn_blocking(move || {
             let sandbox = crate::lua::PluginSandbox::new()?;
-            sandbox.execute(&code, args)
-        })
-        .await
-        .map_err(|error| anyhow::anyhow!("plugin execution worker failed: {error}"))?
+            sandbox.execute_with_cancellation(&code, args, worker_cancelled)
+        });
+
+        const MAX_PLUGIN_WALL_TIME: Duration = Duration::from_secs(5);
+        match tokio::time::timeout(MAX_PLUGIN_WALL_TIME, &mut worker).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => Err(anyhow::anyhow!("plugin execution worker failed: {error}")),
+            Err(_) => {
+                cancelled.store(true, Ordering::Release);
+                match tokio::time::timeout(Duration::from_secs(1), &mut worker).await {
+                    Ok(Ok(_)) => Err(anyhow::anyhow!(
+                        "plugin execution exceeded the 5-second wall-clock limit and was cooperatively cancelled"
+                    )),
+                    Ok(Err(error)) => Err(anyhow::anyhow!(
+                        "plugin execution exceeded the 5-second wall-clock limit; worker failed while stopping: {error}"
+                    )),
+                    Err(_) => {
+                        tracing::error!(
+                            plugin_name,
+                            "plugin worker did not stop after cooperative cancellation; OS-level isolation remains required"
+                        );
+                        Err(anyhow::anyhow!(
+                            "plugin execution exceeded the 5-second wall-clock limit; cooperative cancellation did not stop the worker within 1 second"
+                        ))
+                    }
+                }
+            }
+        }
     }
 
     /// Get plugin count
