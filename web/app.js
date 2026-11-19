@@ -26,6 +26,20 @@ function setAriaModeLabel(message) {
   });
 }
 
+function syncAriaPrivateContextToggles(sourceId) {
+  const source = document.getElementById(sourceId);
+  const checked = Boolean(source?.checked);
+  ['aria-private-context-view', 'aria-private-context-quick'].forEach(id => {
+    const toggle = document.getElementById(id);
+    if (toggle && id !== sourceId) toggle.checked = checked;
+  });
+}
+
+function ariaPrivateContextEnabled(surface) {
+  const id = surface === 'view' ? 'aria-private-context-view' : 'aria-private-context-quick';
+  return Boolean(document.getElementById(id)?.checked);
+}
+
 function appendAriaHistory(events) {
   const view = document.getElementById('aria-view-messages');
   const quick = document.getElementById('aria-chat-messages');
@@ -145,7 +159,7 @@ async function sendLiveAriaMessage(message, surface) {
     isView ? 'aria-view-typing' : 'aria-typing'
   );
   try {
-    const response = await window.janusRuntime.ariaChat(activeAriaConversationId, message);
+    const response = await window.janusRuntime.ariaChat(\n      activeAriaConversationId, message, null, ariaPrivateContextEnabled(surface)\n    );
     removeTyping();
     if (isView) appendAriaViewChat(pm.name || 'ARIA', response.content);
     else appendAriaChat(pm.name || 'ARIA', response.content);
@@ -907,6 +921,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // Customisation
   initCustomisationHandlers();
 
+  document.getElementById('aria-private-context-view')?.addEventListener('change', () => {
+    syncAriaPrivateContextToggles('aria-private-context-view');
+  });
+  document.getElementById('aria-private-context-quick')?.addEventListener('change', () => {
+    syncAriaPrivateContextToggles('aria-private-context-quick');
+  });
   document.getElementById('aria-history-select')?.addEventListener('change', event => {
     selectAriaConversation(event.target.value);
   });
