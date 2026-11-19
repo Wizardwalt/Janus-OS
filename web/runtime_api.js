@@ -64,9 +64,8 @@ class JanusRuntimeApi {
   plugins() { return this.request('/plugins'); }
   hardwareStatus() { return this.request('/hardware/status'); }
 
-  // Aria knowledge and memory APIs are authenticated independently of the
-  // demo WebSocket chat. These methods expose real persisted operations; they
-  // do not imply that a model provider is connected to the chat interface.
+  // Aria knowledge, encrypted history, and provider-backed chat APIs. The
+  // legacy WebSocket path remains explicitly labeled as scripted demo mode.
   ariaImportText(title, text) {
     return this.request('/aria/artifacts/text', {
       method: 'POST', body: JSON.stringify({ title, text }),
