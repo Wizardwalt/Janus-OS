@@ -91,8 +91,20 @@ function populateAriaHistorySelector(conversations) {
 
 async function loadAriaHistory() {
   if (!window.janusRuntime?.hasSession()) return;
-  setAriaModeLabel('LIVE RUNTIME · ENCRYPTED CONVERSATION HISTORY');
+  setAriaModeLabel('CHECKING ARIA RUNTIME…');
   try {
+    const status = await window.janusRuntime.ariaStatus();
+    if (!status.encrypted_history_available) {
+      setAriaModeLabel('ENCRYPTED HISTORY NOT CONFIGURED');
+      appendAriaChat('ARIA SYSTEM', 'Configure the protected Aria data key on the runtime to enable saved conversations.');
+      appendAriaViewChat('ARIA SYSTEM', 'Configure the protected Aria data key on the runtime to enable saved conversations.');
+      return;
+    }
+    if (status.provider_configured) {
+      setAriaModeLabel(`LIVE · ${status.provider_name} · ${status.model} · ENCRYPTED HISTORY`);
+    } else {
+      setAriaModeLabel('LIVE RUNTIME · PROVIDER NOT CONFIGURED');
+    }
     const conversations = await window.janusRuntime.ariaConversations(20);
     if (Array.isArray(conversations) && conversations.length) {
       activeAriaConversationId = conversations[0].conversation_id;

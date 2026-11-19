@@ -101,6 +101,14 @@ impl AriaModelProvider {
         Ok(Self { endpoint, provider_name, model, api_key, client })
     }
 
+    pub fn provider_name(&self) -> &str {
+        &self.provider_name
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
     pub async fn complete(
         &self,
         messages: &[AriaProviderMessage],
