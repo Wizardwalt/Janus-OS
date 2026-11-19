@@ -38,6 +38,7 @@ impl LuaEnv {
         globals.set("coroutine", LuaValue::Nil)?;
         globals.set("pcall", LuaValue::Nil)?;
         globals.set("xpcall", LuaValue::Nil)?;
+        drop(globals);
         Ok(Self { lua, remaining_instructions })
     }
 
@@ -88,18 +89,23 @@ fn install_instruction_budget(
     lua.set_hook(
         HookTriggers::new().every_nth_instruction(interval),
         move |_, _| {
-            let updated = hook_remaining.fetch_update(
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-                |current| current.checked_sub(interval),
-            );
-            if updated.is_err() {
-                Err(LuaError::RuntimeError(error_message.to_string()))
-            } else {
-                Ok(())
+            let mut current = hook_remaining.load(Ordering::Relaxed);
+            loop {
+                if current < interval {
+                    return Err(LuaError::RuntimeError(error_message.to_string()));
+                }
+                match hook_remaining.compare_exchange_weak(
+                    current,
+                    current - interval,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => return Ok(()),
+                    Err(actual) => current = actual,
+                }
             }
         },
-    )?;
+    );
     Ok(remaining)
 }
 
