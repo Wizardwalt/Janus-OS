@@ -75,12 +75,17 @@ class JanusRuntimeApi {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return this.request(`/aria/search?${params.toString()}`);
   }
-  ariaChat(conversationId, message, requestId = null) {
+  ariaChat(conversationId, message, requestId = null, includePrivateContext = false) {
     const id = requestId || window.crypto?.randomUUID?.()
       || `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     return this.request('/aria/chat', {
       method: 'POST',
-      body: JSON.stringify({ conversation_id: conversationId, message, request_id: id }),
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        message,
+        request_id: id,
+        include_private_context: Boolean(includePrivateContext),
+      }),
     });
   }
   ariaConversations(limit = 20) {
