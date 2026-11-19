@@ -321,7 +321,7 @@ mod tests {
         let env = LuaEnv::new().unwrap();
         env.execute_core_source(
             "safe-core",
-            "assert(os == nil and io == nil and package == nil and debug == nil and coroutine == nil and pcall == nil and xpcall == nil)",
+            "assert(os == nil, 'os remains available'); assert(io == nil, 'io remains available'); assert(package == nil, 'package remains available'); assert(debug == nil, 'debug remains available'); assert(coroutine == nil, 'coroutine remains available'); assert(pcall == nil, 'pcall remains available'); assert(xpcall == nil, 'xpcall remains available')",
         )
         .unwrap();
     }
