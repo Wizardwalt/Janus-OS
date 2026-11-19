@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use rand_core::{OsRng, RngCore};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 const MAX_OWNER_ID_BYTES: usize = 160;
@@ -57,6 +58,7 @@ impl ConversationStore {
 
     fn from_connection(mut connection: Connection, key: &[u8; 32]) -> Result<Self> {
         connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.pragma_update(None, "secure_delete", "ON")?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS aria_conversations (
@@ -83,8 +85,9 @@ impl ConversationStore {
             CREATE INDEX IF NOT EXISTS idx_aria_conversations_owner_updated
                 ON aria_conversations(owner_id, updated_at DESC);",
         )?;
-        migrate_encrypted_event_schema(&mut connection, key)?;
-        Ok(Self { connection, key: *key })
+        let conversation_key = derive_conversation_key(key);
+        migrate_encrypted_event_schema(&mut connection, &conversation_key)?;
+        Ok(Self { connection, key: conversation_key })
     }
 
     /// Append one event atomically, creating the conversation on first use.
@@ -203,6 +206,15 @@ impl ConversationStore {
         )?;
         Ok(deleted == 1)
     }
+}
+
+/// Derive a purpose-specific key so conversation encryption does not reuse the
+/// raw key used by Aria's separate personal-memory store.
+fn derive_conversation_key(master_key: &[u8; 32]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"janus-aria-conversation-events-v1\\0");
+    digest.update(master_key);
+    digest.finalize().into()
 }
 
 /// Encrypt legacy plaintext conversation rows and scope event IDs to their owner.
@@ -516,6 +528,37 @@ mod tests {
         assert_eq!(events[0].created_at, now);
 
         drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn conversation_content_is_encrypted_and_requires_the_correct_key() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "janus-aria-conversation-encryption-{}-{unique}", std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database_path = directory.join("conversations.sqlite");
+        let secret = "distinctive-private-conversation-plaintext";
+        {
+            let mut store = ConversationStore::open(&database_path, &test_key()).unwrap();
+            store.append_event("alice", "private-chat", &event("private-event", "user", secret, Utc::now())).unwrap();
+        }
+
+        let database_bytes = std::fs::read(&database_path).unwrap();
+        assert!(!database_bytes.windows(secret.len()).any(|window| window == secret.as_bytes()));
+
+        let wrong_key = [0x24; 32];
+        let wrong_key_store = ConversationStore::open(&database_path, &wrong_key).unwrap();
+        assert!(wrong_key_store.list_events("alice", "private-chat", 20).is_err());
+
+        let correct_key_store = ConversationStore::open(&database_path, &test_key()).unwrap();
+        assert_eq!(correct_key_store.list_events("alice", "private-chat", 20).unwrap()[0].content, secret);
+
+        drop(wrong_key_store);
+        drop(correct_key_store);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
