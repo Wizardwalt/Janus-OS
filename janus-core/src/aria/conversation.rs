@@ -290,7 +290,7 @@ mod tests {
                 .append_event(
                     "alice",
                     "persistent-chat",
-                    &event("persistent-event", "assistant", "persisted reply", now),
+                    &event("persistent-event", "assistant", "persisted reply", now.clone()),
                 )
                 .unwrap();
         }
