@@ -690,7 +690,13 @@ async fn aria_chat(
     });
     if !private_context.is_empty() {
         let mut reference_data = private_context.join("\\n\\n");
-        reference_data.truncate(12_000);
+        if reference_data.len() > 12_000 {
+            let mut boundary = 12_000;
+            while !reference_data.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            reference_data.truncate(boundary);
+        }
         messages.push(AriaProviderMessage {
             role: "system".into(),
             content: format!(
