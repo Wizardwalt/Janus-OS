@@ -6,7 +6,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use reqwest::{redirect::Policy, Client, Url};
 use serde::{Deserialize, Serialize};
-use std::{path::Path, time::Duration};
+use std::{future::Future, path::Path, pin::Pin, time::Duration};
 
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ASSISTANT_MESSAGE_BYTES: usize = 64 * 1024;
@@ -55,6 +55,36 @@ struct ChatCompletionChoice {
 #[derive(Deserialize)]
 struct ChatCompletionMessage {
     content: Option<String>,
+}
+
+/// Provider-neutral asynchronous chat contract used by the authenticated runtime.
+/// Implementations own their transport and secret handling; the API layer depends
+/// only on this contract, not on a vendor SDK or wire format.
+pub trait AriaChatProvider: Send + Sync {
+    fn provider_name(&self) -> &str;
+    fn model(&self) -> &str;
+
+    fn complete<'a>(
+        &'a self,
+        messages: &'a [AriaProviderMessage],
+    ) -> Pin<Box<dyn Future<Output = Result<AriaProviderCompletion>> + Send + 'a>>;
+}
+
+impl AriaChatProvider for AriaModelProvider {
+    fn provider_name(&self) -> &str {
+        AriaModelProvider::provider_name(self)
+    }
+
+    fn model(&self) -> &str {
+        AriaModelProvider::model(self)
+    }
+
+    fn complete<'a>(
+        &'a self,
+        messages: &'a [AriaProviderMessage],
+    ) -> Pin<Box<dyn Future<Output = Result<AriaProviderCompletion>> + Send + 'a>> {
+        Box::pin(AriaModelProvider::complete(self, messages))
+    }
 }
 
 impl AriaModelProvider {
@@ -296,12 +326,12 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
 
-        let provider = AriaModelProvider::new(
+        let provider: Box<dyn AriaChatProvider> = Box::new(AriaModelProvider::new(
             format!("http://{address}/v1/chat/completions"),
             "local-test".into(),
             "test-model".into(),
             None,
-        ).unwrap();
+        ).unwrap());
         let completion = provider.complete(&[
             AriaProviderMessage { role: "system".into(), content: "You are Aria.".into() },
             AriaProviderMessage { role: "user".into(), content: "Hello".into() },
