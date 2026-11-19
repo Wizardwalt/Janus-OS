@@ -224,6 +224,51 @@ mod tests {
         ).is_ok());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn provider_api_key_file_must_be_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "janus-aria-provider-key-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::write(&path, "test-secret-token\\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_private_api_key(&path).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read_private_api_key(&path).unwrap(), "test-secret-token");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn provider_client_does_not_follow_redirects() {
+        async fn redirect() -> axum::http::StatusCode {
+            axum::http::StatusCode::TEMPORARY_REDIRECT
+        }
+        async fn target() -> Json<Value> {
+            Json(json!({
+                "model": "redirected",
+                "choices": [{"message": {"content": "should not be reached"}}]
+            }))
+        }
+        let app = Router::new()
+            .route("/v1/chat/completions", post(redirect))
+            .route("/target", post(target));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let provider = AriaModelProvider::new(
+            format!("http://{address}/v1/chat/completions"),
+            "local-test".into(),
+            "test-model".into(),
+            None,
+        ).unwrap();
+        assert!(provider.complete(&[
+            AriaProviderMessage { role: "user".into(), content: "Hello".into() },
+        ]).await.is_err());
+    }
+
     #[tokio::test]
     async fn sends_openai_compatible_messages_and_parses_assistant_reply() {
         async fn complete(Json(payload): Json<Value>) -> Json<Value> {
