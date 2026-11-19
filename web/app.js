@@ -39,6 +39,42 @@ function appendAriaHistory(events) {
   });
 }
 
+function updateAriaHistoryControls() {
+  const authenticated = Boolean(window.janusRuntime?.hasSession());
+  const selector = document.getElementById('aria-history-select');
+  const newButton = document.getElementById('aria-new-chat-btn');
+  const deleteButton = document.getElementById('aria-delete-chat-btn');
+  if (selector) selector.disabled = !authenticated;
+  if (newButton) newButton.disabled = !authenticated;
+  if (deleteButton) {
+    const selected = selector?.selectedOptions?.[0];
+    deleteButton.disabled = !authenticated || selected?.dataset.saved !== 'true';
+  }
+}
+
+function populateAriaHistorySelector(conversations) {
+  const selector = document.getElementById('aria-history-select');
+  if (!selector) return;
+  selector.replaceChildren();
+  (Array.isArray(conversations) ? conversations : []).forEach((conversation, index) => {
+    const option = document.createElement('option');
+    option.value = conversation.conversation_id;
+    option.dataset.saved = 'true';
+    const updated = conversation.updated_at ? new Date(conversation.updated_at).toLocaleString() : 'saved';
+    option.textContent = `Conversation ${index + 1} · ${updated} · ${conversation.event_count} events`;
+    selector.appendChild(option);
+  });
+  if (!selector.options.length) {
+    const option = document.createElement('option');
+    option.value = activeAriaConversationId;
+    option.textContent = 'New conversation';
+    option.dataset.saved = 'false';
+    selector.appendChild(option);
+  }
+  selector.value = activeAriaConversationId;
+  updateAriaHistoryControls();
+}
+
 async function loadAriaHistory() {
   if (!window.janusRuntime?.hasSession()) return;
   setAriaModeLabel('LIVE RUNTIME · ENCRYPTED CONVERSATION HISTORY');
@@ -46,16 +82,59 @@ async function loadAriaHistory() {
     const conversations = await window.janusRuntime.ariaConversations(20);
     if (Array.isArray(conversations) && conversations.length) {
       activeAriaConversationId = conversations[0].conversation_id;
+      populateAriaHistorySelector(conversations);
       const events = await window.janusRuntime.ariaConversationEvents(activeAriaConversationId, 100);
       appendAriaHistory(events);
     } else {
       activeAriaConversationId = createAriaConversationId();
+      populateAriaHistorySelector([]);
       appendAriaHistory([]);
     }
   } catch (error) {
     setAriaModeLabel('LIVE RUNTIME · HISTORY UNAVAILABLE');
     appendAriaChat('ARIA SYSTEM', `Could not load saved conversations: ${error.message}`);
     appendAriaViewChat('ARIA SYSTEM', `Could not load saved conversations: ${error.message}`);
+  }
+}
+
+async function selectAriaConversation(conversationId) {
+  if (!window.janusRuntime?.hasSession() || !conversationId) return;
+  activeAriaConversationId = conversationId;
+  try {
+    const events = await window.janusRuntime.ariaConversationEvents(conversationId, 100);
+    appendAriaHistory(events);
+    updateAriaHistoryControls();
+  } catch (error) {
+    appendAriaChat('ARIA SYSTEM', `Could not load that conversation: ${error.message}`);
+  }
+}
+
+function startNewAriaConversation() {
+  activeAriaConversationId = createAriaConversationId();
+  const selector = document.getElementById('aria-history-select');
+  if (selector) {
+    const option = document.createElement('option');
+    option.value = activeAriaConversationId;
+    option.textContent = 'New conversation';
+    option.dataset.saved = 'false';
+    selector.add(option);
+    selector.value = activeAriaConversationId;
+  }
+  appendAriaHistory([]);
+  updateAriaHistoryControls();
+}
+
+async function deleteCurrentAriaConversation() {
+  if (!window.janusRuntime?.hasSession()) return;
+  const selector = document.getElementById('aria-history-select');
+  const selected = selector?.selectedOptions?.[0];
+  if (selected?.dataset.saved !== 'true') return;
+  if (!window.confirm('Delete this saved Aria conversation and its encrypted events?')) return;
+  try {
+    await window.janusRuntime.ariaDeleteConversation(activeAriaConversationId);
+    await loadAriaHistory();
+  } catch (error) {
+    appendAriaChat('ARIA SYSTEM', `Could not delete that conversation: ${error.message}`);
   }
 }
 
@@ -71,6 +150,19 @@ async function sendLiveAriaMessage(message, surface) {
     if (isView) appendAriaViewChat(pm.name || 'ARIA', response.content);
     else appendAriaChat(pm.name || 'ARIA', response.content);
     setAriaModeLabel(`LIVE · ${response.provider} · ${response.model}`);
+    const selector = document.getElementById('aria-history-select');
+    if (selector && !Array.from(selector.options).some(option => option.value === activeAriaConversationId)) {
+      const option = document.createElement('option');
+      option.value = activeAriaConversationId;
+      option.textContent = 'Current conversation';
+      option.dataset.saved = 'true';
+      selector.add(option);
+      selector.value = activeAriaConversationId;
+    } else if (selector) {
+      const selected = selector.selectedOptions[0];
+      if (selected) selected.dataset.saved = 'true';
+    }
+    updateAriaHistoryControls();
     setAriaMood('curious');
   } catch (error) {
     removeTyping();
@@ -803,9 +895,18 @@ document.addEventListener('DOMContentLoaded', () => {
   // Customisation
   initCustomisationHandlers();
 
+  document.getElementById('aria-history-select')?.addEventListener('change', event => {
+    selectAriaConversation(event.target.value);
+  });
+  document.getElementById('aria-new-chat-btn')?.addEventListener('click', startNewAriaConversation);
+  document.getElementById('aria-delete-chat-btn')?.addEventListener('click', deleteCurrentAriaConversation);
+
   // Restore the latest authenticated conversation when a runtime session exists.
   if (window.janusRuntime?.hasSession()) loadAriaHistory();
-  else setAriaModeLabel('SCRIPTED DEMO · SIGN IN FOR LIVE ARIA');
+  else {
+    setAriaModeLabel('SCRIPTED DEMO · SIGN IN FOR LIVE ARIA');
+    updateAriaHistoryControls();
+  }
 
   // Boot
   runBoot();
