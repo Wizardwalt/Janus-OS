@@ -208,6 +208,12 @@ async function sendLiveAriaMessage(message, surface) {
 window.addEventListener('janus:session', loadAriaHistory);
 window.addEventListener('janus:logout', () => {
   activeAriaConversationId = createAriaConversationId();
+  ['aria-private-context-view', 'aria-private-context-quick'].forEach(id => {
+    const toggle = document.getElementById(id);
+    if (toggle) toggle.checked = false;
+  });
+  populateAriaHistorySelector([]);
+  updateAriaHistoryControls();
   appendAriaHistory([]);
   appendAriaChat('ARIA', 'Signed out. The remaining chat is scripted demo mode.');
   setAriaModeLabel('SCRIPTED DEMO · SIGN IN FOR LIVE ARIA');
