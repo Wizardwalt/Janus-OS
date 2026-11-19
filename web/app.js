@@ -12,6 +12,86 @@ let ws = null;
 let wsReady  = false;
 let currentCategory = null;
 let opsCount = 0;
+let activeAriaConversationId = createAriaConversationId();
+
+function createAriaConversationId() {
+  return window.crypto?.randomUUID?.()
+    || `aria-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function setAriaModeLabel(message) {
+  ['aria-view-mode', 'aria-chat-mode'].forEach(id => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = message;
+  });
+}
+
+function appendAriaHistory(events) {
+  const view = document.getElementById('aria-view-messages');
+  const quick = document.getElementById('aria-chat-messages');
+  view?.replaceChildren();
+  quick?.replaceChildren();
+  (Array.isArray(events) ? events : []).forEach(event => {
+    if (!['user', 'assistant'].includes(event.role)) return;
+    const from = event.role === 'user' ? 'YOU' : (pm.name || 'ARIA');
+    appendAriaViewChat(from, event.content);
+    appendAriaChat(from, event.content);
+  });
+}
+
+async function loadAriaHistory() {
+  if (!window.janusRuntime?.hasSession()) return;
+  setAriaModeLabel('LIVE RUNTIME · ENCRYPTED CONVERSATION HISTORY');
+  try {
+    const conversations = await window.janusRuntime.ariaConversations(20);
+    if (Array.isArray(conversations) && conversations.length) {
+      activeAriaConversationId = conversations[0].conversation_id;
+      const events = await window.janusRuntime.ariaConversationEvents(activeAriaConversationId, 100);
+      appendAriaHistory(events);
+    } else {
+      activeAriaConversationId = createAriaConversationId();
+      appendAriaHistory([]);
+    }
+  } catch (error) {
+    setAriaModeLabel('LIVE RUNTIME · HISTORY UNAVAILABLE');
+    appendAriaChat('ARIA SYSTEM', `Could not load saved conversations: ${error.message}`);
+    appendAriaViewChat('ARIA SYSTEM', `Could not load saved conversations: ${error.message}`);
+  }
+}
+
+async function sendLiveAriaMessage(message, surface) {
+  const isView = surface === 'view';
+  showTyping(
+    isView ? 'aria-view-messages' : 'aria-chat-messages',
+    isView ? 'aria-view-typing' : 'aria-typing'
+  );
+  try {
+    const response = await window.janusRuntime.ariaChat(activeAriaConversationId, message);
+    removeTyping();
+    if (isView) appendAriaViewChat(pm.name || 'ARIA', response.content);
+    else appendAriaChat(pm.name || 'ARIA', response.content);
+    setAriaModeLabel(`LIVE · ${response.provider} · ${response.model}`);
+    setAriaMood('curious');
+  } catch (error) {
+    removeTyping();
+    const detail = error.status === 503
+      ? 'Live provider or encrypted storage is not configured on the runtime.'
+      : error.message;
+    const message = `Live Aria request failed: ${detail}`;
+    if (isView) appendAriaViewChat('ARIA SYSTEM', message);
+    else appendAriaChat('ARIA SYSTEM', message);
+    setAriaModeLabel(error.status === 503 ? 'LIVE PROVIDER NOT CONFIGURED' : 'LIVE SERVICE ERROR');
+    setAriaMood('sad');
+  }
+}
+
+window.addEventListener('janus:session', loadAriaHistory);
+window.addEventListener('janus:logout', () => {
+  activeAriaConversationId = createAriaConversationId();
+  appendAriaHistory([]);
+  appendAriaChat('ARIA', 'Signed out. The remaining chat is scripted demo mode.');
+  setAriaModeLabel('SCRIPTED DEMO · SIGN IN FOR LIVE ARIA');
+});
 
 const wsQueue = [];
 
@@ -447,14 +527,19 @@ function appendAriaViewChat(from, text) {
   msgs.appendChild(msg); msgs.scrollTop = msgs.scrollHeight;
 }
 
-function sendAriaViewMessage() {
+async function sendAriaViewMessage() {
   const input = document.getElementById('aria-view-input');
   if (!input) return;
   const text = input.value.trim(); if (!text) return;
   input.value = '';
   appendAriaViewChat('YOU', text);
-  wsSend({ type: 'aria_chat', message: text });
   setAriaMood('processing');
+  if (window.janusRuntime?.hasSession()) {
+    await sendLiveAriaMessage(text, 'view');
+    return;
+  }
+  setAriaModeLabel('SCRIPTED DEMO · SIGN IN FOR LIVE ARIA');
+  wsSend({ type: 'aria_chat', message: text });
   showTyping('aria-view-messages', 'aria-view-typing');
 }
 
@@ -472,13 +557,18 @@ function closeAriaChat() {
   document.getElementById('aria-chat-overlay').classList.add('hidden');
 }
 
-function sendAriaMessage() {
+async function sendAriaMessage() {
   const input = document.getElementById('aria-input');
   const text = input.value.trim(); if (!text) return;
   input.value = '';
   appendAriaChat('YOU', text);
-  wsSend({ type: 'aria_chat', message: text });
   setAriaMood('processing');
+  if (window.janusRuntime?.hasSession()) {
+    await sendLiveAriaMessage(text, 'quick');
+    return;
+  }
+  setAriaModeLabel('SCRIPTED DEMO · SIGN IN FOR LIVE ARIA');
+  wsSend({ type: 'aria_chat', message: text });
   showTyping('aria-chat-messages', 'aria-typing');
 }
 
@@ -712,6 +802,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Customisation
   initCustomisationHandlers();
+
+  // Restore the latest authenticated conversation when a runtime session exists.
+  if (window.janusRuntime?.hasSession()) loadAriaHistory();
+  else setAriaModeLabel('SCRIPTED DEMO · SIGN IN FOR LIVE ARIA');
 
   // Boot
   runBoot();
