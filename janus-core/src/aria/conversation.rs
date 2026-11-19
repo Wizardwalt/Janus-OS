@@ -196,6 +196,43 @@ impl ConversationStore {
         }).collect()
     }
 
+    /// Return the newest events for provider context, in chronological order.
+    pub fn list_recent_events(
+        &self,
+        owner_id: &str,
+        conversation_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ConversationEvent>> {
+        validate_identifier(owner_id, MAX_OWNER_ID_BYTES, "owner_id")?;
+        validate_identifier(conversation_id, MAX_CONVERSATION_ID_BYTES, "conversation_id")?;
+        let limit = limit.clamp(1, 100);
+        let mut statement = self.connection.prepare(
+            "SELECT event_id, nonce, ciphertext, created_at
+             FROM aria_conversation_events
+             WHERE owner_id = ?1 AND conversation_id = ?2
+             ORDER BY created_at DESC, event_id DESC LIMIT ?3",
+        )?;
+        let rows = statement.query_map(params![owner_id, conversation_id, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let encrypted = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut events = encrypted
+            .into_iter()
+            .map(|(event_id, nonce, ciphertext, created_at)| {
+                decrypt_event(
+                    &self.key, owner_id, conversation_id, &event_id, &created_at, &nonce, &ciphertext,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        events.reverse();
+        Ok(events)
+    }
+
     /// Delete a conversation only within the supplied owner namespace.
     pub fn delete_conversation(&mut self, owner_id: &str, conversation_id: &str) -> Result<bool> {
         validate_identifier(owner_id, MAX_OWNER_ID_BYTES, "owner_id")?;
@@ -422,6 +459,22 @@ mod tests {
         assert_eq!(store.list_events("bob", "chat-1", 20).unwrap().len(), 1);
         assert!(store.list_events("mallory", "chat-1", 20).unwrap().is_empty());
         assert_eq!(store.list_conversations("alice", 20).unwrap()[0].event_count, 2);
+    }
+
+    #[test]
+    fn recent_events_returns_newest_events_in_chronological_order() {
+        let mut store = ConversationStore::in_memory(&test_key()).unwrap();
+        let now = Utc::now();
+        for index in 0..3 {
+            store.append_event(
+                "alice",
+                "chat-a",
+                &event(&format!("event-{index}"), "user", &format!("message-{index}"), now + chrono::Duration::seconds(index)),
+            ).unwrap();
+        }
+
+        let recent = store.list_recent_events("alice", "chat-a", 2).unwrap();
+        assert_eq!(recent.iter().map(|event| event.content.as_str()).collect::<Vec<_>>(), vec!["message-1", "message-2"]);
     }
 
     #[test]
