@@ -587,7 +587,7 @@ async fn aria_chat(
         content: "You are Aria, the honest, provider-independent assistant for Janus. Be transparent about limitations and never claim actions or tool access you do not have. For cybersecurity, support lawful learning and defensive work on owned, explicitly authorized, or isolated lab systems only. Do not present harmful activity against others as acceptable.".into(),
     });
     for event in context {
-        if matches!(event.role.as_str(), "system" | "user" | "assistant") {
+        if matches!(event.role.as_str(), "user" | "assistant") {
             messages.push(AriaProviderMessage { role: event.role, content: event.content });
         }
     }
