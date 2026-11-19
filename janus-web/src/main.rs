@@ -959,10 +959,7 @@ async fn runtime_proxy(
 ) -> Result<Response<Body>, StatusCode> {
     let method = reqwest::Method::from_bytes(request.method().as_str().as_bytes())
         .map_err(|_| StatusCode::METHOD_NOT_ALLOWED)?;
-    if method != reqwest::Method::GET
-        && method != reqwest::Method::POST
-        && method != reqwest::Method::DELETE
-    {
+    if !runtime_proxy_method_allowed(&method) {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
 
