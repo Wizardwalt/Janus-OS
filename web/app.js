@@ -159,7 +159,9 @@ async function sendLiveAriaMessage(message, surface) {
     isView ? 'aria-view-typing' : 'aria-typing'
   );
   try {
-    const response = await window.janusRuntime.ariaChat(\n      activeAriaConversationId, message, null, ariaPrivateContextEnabled(surface)\n    );
+    const response = await window.janusRuntime.ariaChat(
+      activeAriaConversationId, message, null, ariaPrivateContextEnabled(surface)
+    );
     removeTyping();
     if (isView) appendAriaViewChat(pm.name || 'ARIA', response.content);
     else appendAriaChat(pm.name || 'ARIA', response.content);
