@@ -75,6 +75,9 @@ class JanusRuntimeApi {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return this.request(`/aria/search?${params.toString()}`);
   }
+  ariaStatus() {
+    return this.request('/aria/status');
+  }
   ariaChat(conversationId, message, requestId = null, includePrivateContext = false) {
     const id = requestId || window.crypto?.randomUUID?.()
       || `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
