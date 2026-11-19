@@ -572,7 +572,7 @@ async fn aria_chat(
         model: None,
         created_at: chrono::Utc::now(),
     };
-    let context = {
+    let (context, private_context) = {
         let mut stores = match state.aria.lock() {
             Ok(stores) => stores,
             Err(_) => return aria_store_lock_unavailable(),
