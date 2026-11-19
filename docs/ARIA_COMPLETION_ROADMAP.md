@@ -6,15 +6,16 @@ Complete ARIA as JanusOS's persistent, learning-capable, multi-device AI compani
 
 This document records the current repository evidence and implementation order. It does not claim that planned capabilities already exist. The security baseline is defined in [ARIA_SECURITY_ARCHITECTURE.md](ARIA_SECURITY_ARCHITECTURE.md).
 
-## Current verified state on `repair/janus-os-full-repair`
+## Current verified state on `main` — 2026-11-19
 
-- `web/aria3d.js`, `web/aria_profile.js`, and `web/aria_setup.js` provide a 3D avatar, a first-run customization wizard, and a browser-local profile/modification store.
-- `web/app.js` sends chat messages over the legacy `/ws` channel using `aria_chat`.
-- `janus-web/src/main.rs` handles `aria_chat` with the scripted `aria_respond()` function. It explicitly says that a live model and persistent learning are not connected.
-- The WebSocket sends periodic scripted thoughts. Those messages are not model-generated cognition or live telemetry.
-- The production `janus-runtime` already has authentication, an organization-scoped SQLite state API, and an authenticated browser client in `web/runtime_api.js`. The current ARIA chat path does not use that API for memory.
-- `docs/ARIA_PORTABILITY_AND_RECOVERY.md` defines the intended portable identity, memory journal, replication, failover, and restore requirements. It explicitly describes an architecture requirement, not an implemented feature.
-- No model provider is currently wired into the ARIA chat path. No original JANUS or ARIA acronym expansion is established by the inspected source; do not invent one.
+- `web/app.js` uses the authenticated `window.janusRuntime.ariaChat` API for live chat when a user is signed in. It loads owner-scoped conversation history, exposes a user-controlled private-context toggle, and labels provider/storage readiness. The 3D avatar remains a presentation layer, not evidence of independent cognition.
+- `janus-runtime/src/aria_provider.rs` contains a server-side asynchronous provider contract and an OpenAI-compatible HTTP adapter. The adapter keeps credentials server-side, reads an owner-only key file, disables redirects, restricts cleartext HTTP to loopback, and bounds request count, response bytes, output length, and request time. Local model servers can be used when they implement this protocol; arbitrary provider protocols still need their own adapter.
+- `POST /aria/chat` persists the authenticated user's user/assistant events, uses a request ID for retry idempotency, and optionally assembles private context only when the user explicitly enables it. Retrieved reference material is marked as untrusted data before it is sent to the model.
+- `ConversationStore` is owner-scoped and encrypts event payloads at rest with XChaCha20-Poly1305 using the host-supplied Aria data key. Tests cover owner isolation, reopen persistence, plaintext absence, and wrong-key failure. The data-key file and recovery lifecycle still need operational hardening.
+- `janus-runtime/src/api.rs` exposes authenticated provider readiness, conversation list/read/append/delete, and live chat routes. The browser client does not receive the provider API key.
+- The legacy WebSocket path in `janus-web/src/main.rs` still uses scripted `aria_respond()` output and periodic scripted thoughts. It is a demo path, not the live provider-backed chat path. Signed-out UI explicitly labels its remaining chat as scripted demo mode.
+- The current provider contract is transport-neutral at the runtime boundary, but only the OpenAI-compatible adapter is implemented. Streaming, arbitrary vendor/local adapters, API-level failure-injection tests, conversation export/retention, and full key rotation/recovery remain incomplete.
+- No original JANUS or ARIA acronym expansion is established by the inspected source; do not invent one.
 
 ## Implementation principles
 
@@ -39,22 +40,23 @@ This document records the current repository evidence and implementation order. 
 **Exit criteria:** a reviewed dependency map and tests for the existing chat and profile behavior.
 
 ### Phase 1 — Real conversational backend
-- Replace the scripted response path with a server-side model-provider interface.
-- Support a configurable OpenAI-compatible chat endpoint and a local-model endpoint through the same adapter contract.
-- Store secrets only in the runtime's protected configuration/secret mechanism; never expose them to the browser.
-- Add request timeouts, bounded input/output, cancellation, clear provider-unavailable errors, and model/provider status.
-- Preserve a deterministic offline fallback that clearly identifies itself as fallback text, not AI output.
+**Status: partially implemented.**
+- The authenticated browser UI now uses the runtime's server-side provider adapter for live chat; the legacy WebSocket remains scripted demo mode.
+- A provider-neutral async trait is now the runtime boundary. The implemented adapter speaks the OpenAI-compatible chat-completions protocol; additional provider protocols and streaming are not yet implemented.
+- Credentials stay server-side. The current adapter validates HTTPS/loopback endpoints, rejects redirects, bounds inputs/outputs, and applies connection/request timeouts.
+- The runtime reports provider readiness and returns explicit unavailable/error responses rather than fabricating model output.
+- Remaining: provider-specific adapters, streaming, cancellation across provider HTTP requests, stronger API-level failure-injection tests, and a clearly identified offline fallback.
 
-**Exit criteria:** a real configured model can answer through the ARIA UI; invalid credentials, unavailable providers, timeouts, and offline operation are handled honestly and tested.
+**Exit criteria:** each adapter has contract tests, live UI round-trips are tested against a local fixture provider, and unavailable/invalid/timeout states remain truthful.
 
 ### Phase 2 — Durable conversation and memory
-- Add user-scoped persistent conversation events and memory records in SQLite.
-- Add retrieval of relevant prior context with source/event references.
-- Support user corrections, explicit remember/forget controls, export, and deletion semantics.
-- Separate raw conversation history from extracted long-term memories; never silently turn every utterance into a permanent fact.
-- Add retention limits, database migrations, access checks, and audit coverage.
+**Status: partially implemented.**
+- Encrypted, owner-scoped conversation events and authenticated list/read/append/delete routes are connected to the live chat UI.
+- Private-memory and knowledge retrieval are opt-in per chat request; retrieved material carries source references and is explicitly treated as untrusted reference data.
+- Explicit remember, correct, forget, and reviewed learning-proposal routes exist in the authenticated runtime.
+- Remaining: conversation export, cursor pagination for long histories, retention/expiry policy, key rotation and recovery, and API-level cross-account/failure-injection coverage.
 
-**Exit criteria:** conversation survives app restarts, remains isolated per user, can be exported, and memory retrieval can show which stored records informed an answer.
+**Exit criteria:** exports and deletion are verified across restarts, long histories paginate without omission, and key-loss/recovery behavior is documented and tested.
 
 ### Phase 3 — Learning and knowledge management
 - Add an auditable learning pipeline: propose memory/knowledge updates, show evidence and confidence, and accept or reject them.
@@ -117,4 +119,4 @@ This document records the current repository evidence and implementation order. 
 
 ## Immediate next engineering slice
 
-Characterize the authentication and runtime boundary, then implement the server-side model adapter without exposing credentials to the browser. Follow it with user-scoped persistent conversation storage. Do not wire ARIA memory into the existing organization-wide generic state key: that state is organization-scoped, not an appropriate private per-user memory boundary.
+Add contract-level API tests for authenticated live chat, cross-account conversation access denial, provider failure, and idempotent retries. Then implement at least one additional adapter protocol (not merely another OpenAI-compatible endpoint), followed by streaming/cancellation and export/retention/key-rotation acceptance. Do not wire Aria memory into the organization-wide generic state key: that state is organization-scoped, not an appropriate private per-user memory boundary.
