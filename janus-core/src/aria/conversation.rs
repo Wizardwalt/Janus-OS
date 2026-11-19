@@ -4,8 +4,14 @@
 //! The host must authenticate the caller and supply the verified owner ID.
 
 use anyhow::{anyhow, Context, Result};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit, Payload},
+    XChaCha20Poly1305, XNonce,
+};
 use chrono::{DateTime, Utc};
+use rand_core::{OsRng, RngCore};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 const MAX_OWNER_ID_BYTES: usize = 160;
@@ -14,7 +20,7 @@ const MAX_EVENT_ID_BYTES: usize = 160;
 const MAX_CONTENT_BYTES: usize = 64 * 1024;
 const MAX_PROVIDER_FIELD_BYTES: usize = 128;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationEvent {
     pub event_id: String,
     pub role: String,
@@ -36,19 +42,20 @@ pub struct ConversationSummary {
 /// callers must never accept an owner ID directly from an untrusted request.
 pub struct ConversationStore {
     connection: Connection,
+    key: [u8; 32],
 }
 
 impl ConversationStore {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn open(path: impl AsRef<Path>, key: &[u8; 32]) -> Result<Self> {
         let connection = Connection::open(path).context("opening Aria conversation database")?;
-        Self::from_connection(connection)
+        Self::from_connection(connection, key)
     }
 
-    pub fn in_memory() -> Result<Self> {
-        Self::from_connection(Connection::open_in_memory()?)
+    pub fn in_memory(key: &[u8; 32]) -> Result<Self> {
+        Self::from_connection(Connection::open_in_memory()?, key)
     }
 
-    fn from_connection(mut connection: Connection) -> Result<Self> {
+    fn from_connection(mut connection: Connection, key: &[u8; 32]) -> Result<Self> {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
@@ -63,10 +70,8 @@ impl ConversationStore {
                 event_id TEXT NOT NULL,
                 owner_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                provider TEXT,
-                model TEXT,
+                nonce BLOB NOT NULL,
+                ciphertext BLOB NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(owner_id, conversation_id)
                     REFERENCES aria_conversations(owner_id, conversation_id)
@@ -78,8 +83,8 @@ impl ConversationStore {
             CREATE INDEX IF NOT EXISTS idx_aria_conversations_owner_updated
                 ON aria_conversations(owner_id, updated_at DESC);",
         )?;
-        migrate_event_identity_scope(&mut connection)?;
-        Ok(Self { connection })
+        migrate_encrypted_event_schema(&mut connection, key)?;
+        Ok(Self { connection, key: *key })
     }
 
     /// Append one event atomically, creating the conversation on first use.
@@ -105,6 +110,9 @@ impl ConversationStore {
         }
 
         let timestamp = event.created_at.to_rfc3339();
+        let (nonce, ciphertext) = encrypt_event(
+            &self.key, owner_id, conversation_id, &event.event_id, &timestamp, event,
+        )?;
         let tx = self.connection.transaction()?;
         tx.execute(
             "INSERT INTO aria_conversations(owner_id, conversation_id, created_at, updated_at)
@@ -115,18 +123,9 @@ impl ConversationStore {
         )?;
         tx.execute(
             "INSERT INTO aria_conversation_events
-             (event_id, owner_id, conversation_id, role, content, provider, model, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                event.event_id,
-                owner_id,
-                conversation_id,
-                event.role,
-                event.content,
-                event.provider,
-                event.model,
-                timestamp
-            ],
+             (event_id, owner_id, conversation_id, nonce, ciphertext, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![event.event_id, owner_id, conversation_id, nonce, ciphertext, timestamp],
         )?;
         tx.commit()?;
         Ok(())
@@ -173,32 +172,24 @@ impl ConversationStore {
         validate_identifier(conversation_id, MAX_CONVERSATION_ID_BYTES, "conversation_id")?;
         let limit = limit.clamp(1, 1_000);
         let mut statement = self.connection.prepare(
-            "SELECT event_id, role, content, provider, model, created_at
+            "SELECT event_id, nonce, ciphertext, created_at
              FROM aria_conversation_events
              WHERE owner_id = ?1 AND conversation_id = ?2
              ORDER BY created_at ASC, event_id ASC LIMIT ?3",
         )?;
         let rows = statement.query_map(params![owner_id, conversation_id, limit as i64], |row| {
-            let created: String = row.get(5)?;
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                created,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })?;
-        rows.map(|row| {
-            let (event_id, role, content, provider, model, created) = row?;
-            Ok(ConversationEvent {
-                event_id,
-                role,
-                content,
-                provider,
-                model,
-                created_at: parse_timestamp(&created)?,
-            })
+        let encrypted = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        encrypted.into_iter().map(|(event_id, nonce, ciphertext, created_at)| {
+            decrypt_event(
+                &self.key, owner_id, conversation_id, &event_id, &created_at, &nonce, &ciphertext,
+            )
         }).collect()
     }
 
@@ -214,28 +205,50 @@ impl ConversationStore {
     }
 }
 
-/// Upgrade databases created before event IDs were scoped to an owner.
-/// The migration is transactional and preserves all existing conversation events.
-fn migrate_event_identity_scope(connection: &mut Connection) -> Result<()> {
+/// Encrypt legacy plaintext conversation rows and scope event IDs to their owner.
+/// The migration is transactional: existing history is retained or the old table remains.
+fn migrate_encrypted_event_schema(connection: &mut Connection, key: &[u8; 32]) -> Result<()> {
     let mut statement = connection.prepare("PRAGMA table_info(aria_conversation_events)")?;
-    let rows = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
-    })?;
-    let mut primary_key_columns = Vec::new();
-    for row in rows {
-        let (name, position) = row?;
-        if position > 0 {
-            primary_key_columns.push((position, name));
-        }
-    }
-    primary_key_columns.sort_by_key(|(position, _)| *position);
-    let primary_key_columns = primary_key_columns
-        .into_iter()
-        .map(|(_, name)| name)
-        .collect::<Vec<_>>();
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    let columns = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
 
-    if primary_key_columns.len() == 1 && primary_key_columns[0] == "event_id" {
+    if columns.iter().any(|column| column == "content") {
+        let mut statement = connection.prepare(
+            "SELECT event_id, owner_id, conversation_id, role, content, provider, model, created_at
+             FROM aria_conversation_events ORDER BY owner_id, created_at, event_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })?;
+        let legacy = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+
+        let mut encrypted_rows = Vec::with_capacity(legacy.len());
+        for (event_id, owner_id, conversation_id, role, content, provider, model, created_at) in legacy {
+            let event = ConversationEvent {
+                event_id: event_id.clone(),
+                role,
+                content,
+                provider,
+                model,
+                created_at: parse_timestamp(&created_at)?,
+            };
+            let (nonce, ciphertext) = encrypt_event(
+                key, &owner_id, &conversation_id, &event_id, &created_at, &event,
+            )?;
+            encrypted_rows.push((event_id, owner_id, conversation_id, nonce, ciphertext, created_at));
+        }
+
         let tx = connection.transaction()?;
         tx.execute_batch(
             "DROP INDEX IF EXISTS idx_aria_conversation_events_owner_time;
@@ -244,34 +257,112 @@ fn migrate_event_identity_scope(connection: &mut Connection) -> Result<()> {
                 event_id TEXT NOT NULL,
                 owner_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                provider TEXT,
-                model TEXT,
+                nonce BLOB NOT NULL,
+                ciphertext BLOB NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(owner_id, conversation_id)
                     REFERENCES aria_conversations(owner_id, conversation_id)
                     ON DELETE CASCADE,
                 PRIMARY KEY(owner_id, event_id)
-             );
-             INSERT INTO aria_conversation_events
-                (event_id, owner_id, conversation_id, role, content, provider, model, created_at)
-             SELECT event_id, owner_id, conversation_id, role, content, provider, model, created_at
-             FROM aria_conversation_events_legacy;
-             DROP TABLE aria_conversation_events_legacy;
+             );",
+        )?;
+        for (event_id, owner_id, conversation_id, nonce, ciphertext, created_at) in encrypted_rows {
+            tx.execute(
+                "INSERT INTO aria_conversation_events
+                 (event_id, owner_id, conversation_id, nonce, ciphertext, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![event_id, owner_id, conversation_id, nonce, ciphertext, created_at],
+            )?;
+        }
+        tx.execute_batch(
+            "DROP TABLE aria_conversation_events_legacy;
              CREATE INDEX idx_aria_conversation_events_owner_time
                 ON aria_conversation_events(owner_id, conversation_id, created_at, event_id);",
         )?;
         tx.commit()?;
-    } else if primary_key_columns.len() != 2
-        || primary_key_columns[0] != "owner_id"
-        || primary_key_columns[1] != "event_id"
-    {
-        anyhow::bail!(
-            "unsupported aria_conversation_events primary key: {primary_key_columns:?}"
-        );
+    } else {
+        let mut statement = connection.prepare("PRAGMA table_info(aria_conversation_events)")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+        })?;
+        let mut primary_key_columns = Vec::new();
+        for row in rows {
+            let (name, position) = row?;
+            if position > 0 {
+                primary_key_columns.push((position, name));
+            }
+        }
+        primary_key_columns.sort_by_key(|(position, _)| *position);
+        let primary_key_columns = primary_key_columns
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect::<Vec<_>>();
+        drop(statement);
+        if primary_key_columns.len() != 2
+            || primary_key_columns[0] != "owner_id"
+            || primary_key_columns[1] != "event_id"
+            || !columns.iter().any(|column| column == "nonce")
+            || !columns.iter().any(|column| column == "ciphertext")
+        {
+            anyhow::bail!("unsupported aria_conversation_events schema");
+        }
     }
     Ok(())
+}
+
+fn event_aad(
+    owner_id: &str,
+    conversation_id: &str,
+    event_id: &str,
+    created_at: &str,
+) -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(&(owner_id, conversation_id, event_id, created_at))?)
+}
+
+fn encrypt_event(
+    key: &[u8; 32],
+    owner_id: &str,
+    conversation_id: &str,
+    event_id: &str,
+    created_at: &str,
+    event: &ConversationEvent,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let cipher = XChaCha20Poly1305::new_from_slice(key)
+        .map_err(|_| anyhow!("invalid Aria conversation encryption key"))?;
+    let mut nonce = [0u8; 24];
+    OsRng.fill_bytes(&mut nonce);
+    let plaintext = serde_json::to_vec(event).context("serializing Aria conversation event")?;
+    let aad = event_aad(owner_id, conversation_id, event_id, created_at)?;
+    let ciphertext = cipher
+        .encrypt(XNonce::from_slice(&nonce), Payload { msg: &plaintext, aad: &aad })
+        .map_err(|_| anyhow!("encrypting Aria conversation event failed"))?;
+    Ok((nonce.to_vec(), ciphertext))
+}
+
+fn decrypt_event(
+    key: &[u8; 32],
+    owner_id: &str,
+    conversation_id: &str,
+    event_id: &str,
+    created_at: &str,
+    nonce: &[u8],
+    ciphertext: &[u8],
+) -> Result<ConversationEvent> {
+    if nonce.len() != 24 {
+        anyhow::bail!("stored Aria conversation nonce has invalid length");
+    }
+    let cipher = XChaCha20Poly1305::new_from_slice(key)
+        .map_err(|_| anyhow!("invalid Aria conversation encryption key"))?;
+    let aad = event_aad(owner_id, conversation_id, event_id, created_at)?;
+    let plaintext = cipher
+        .decrypt(XNonce::from_slice(nonce), Payload { msg: ciphertext, aad: &aad })
+        .map_err(|_| anyhow!("Aria conversation authentication failed"))?;
+    let event: ConversationEvent = serde_json::from_slice(&plaintext)
+        .context("decoding encrypted Aria conversation event")?;
+    if event.event_id != event_id || event.created_at.to_rfc3339() != created_at {
+        anyhow::bail!("encrypted Aria conversation metadata does not match its database index");
+    }
+    Ok(event)
 }
 
 fn validate_identifier(value: &str, max_bytes: usize, name: &str) -> Result<()> {
@@ -292,6 +383,10 @@ mod tests {
     use super::*;
     use chrono::Duration;
 
+    fn test_key() -> [u8; 32] {
+        [0x42; 32]
+    }
+
     fn event(id: &str, role: &str, content: &str, at: DateTime<Utc>) -> ConversationEvent {
         ConversationEvent {
             event_id: id.into(),
@@ -305,7 +400,7 @@ mod tests {
 
     #[test]
     fn conversation_events_are_durable_and_owner_scoped() {
-        let mut store = ConversationStore::in_memory().unwrap();
+        let mut store = ConversationStore::in_memory(&test_key()).unwrap();
         let now = Utc::now();
         store.append_event("alice", "chat-1", &event("e1", "user", "hello", now)).unwrap();
         store.append_event("alice", "chat-1", &event("e2", "assistant", "hi", now + Duration::seconds(1))).unwrap();
@@ -319,7 +414,7 @@ mod tests {
 
     #[test]
     fn event_identifiers_are_scoped_to_their_owner() {
-        let mut store = ConversationStore::in_memory().unwrap();
+        let mut store = ConversationStore::in_memory(&test_key()).unwrap();
         let now = Utc::now();
         store.append_event("alice", "chat-a", &event("shared-event", "user", "alice", now)).unwrap();
         store.append_event("bob", "chat-b", &event("shared-event", "user", "bob", now)).unwrap();
@@ -361,7 +456,7 @@ mod tests {
             ).unwrap();
         }
 
-        let mut store = ConversationStore::open(&database_path).unwrap();
+        let mut store = ConversationStore::open(&database_path, &test_key()).unwrap();
         let now = Utc::now();
         store.append_event("bob", "chat-b", &event("shared-event", "user", "new owner", now)).unwrap();
         assert_eq!(store.list_events("alice", "chat-a", 20).unwrap()[0].content, "preserved");
@@ -373,7 +468,7 @@ mod tests {
 
     #[test]
     fn deletion_is_owner_scoped_and_cascades_events() {
-        let mut store = ConversationStore::in_memory().unwrap();
+        let mut store = ConversationStore::in_memory(&test_key()).unwrap();
         let now = Utc::now();
         store.append_event("alice", "same-id", &event("alice-event", "user", "alice", now)).unwrap();
         store.append_event("bob", "same-id", &event("bob-event", "user", "bob", now)).unwrap();
@@ -401,7 +496,7 @@ mod tests {
         let now = Utc::now();
 
         {
-            let mut store = ConversationStore::open(&database_path).unwrap();
+            let mut store = ConversationStore::open(&database_path, &test_key()).unwrap();
             store
                 .append_event(
                     "alice",
@@ -411,7 +506,7 @@ mod tests {
                 .unwrap();
         }
 
-        let reopened = ConversationStore::open(&database_path).unwrap();
+        let reopened = ConversationStore::open(&database_path, &test_key()).unwrap();
         let events = reopened.list_events("alice", "persistent-chat", 20).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_id, "persistent-event");
@@ -426,7 +521,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_roles_and_oversized_content() {
-        let mut store = ConversationStore::in_memory().unwrap();
+        let mut store = ConversationStore::in_memory(&test_key()).unwrap();
         let now = Utc::now();
         assert!(store.append_event("alice", "chat", &event("e1", "developer", "hello", now)).is_err());
         assert!(store.append_event("alice", "chat", &event("e2", "user", &"x".repeat(MAX_CONTENT_BYTES + 1), now)).is_err());
