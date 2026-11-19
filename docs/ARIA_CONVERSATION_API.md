@@ -45,7 +45,7 @@ Request:
 }
 ```
 
-The optional `request_id` makes retries idempotent: a completed request returns its saved assistant event instead of generating a second response. The response includes the saved user/assistant event IDs, assistant content, provider label, and model ID. If no provider is configured, the endpoint returns HTTP 503 and does not silently fall back to the scripted demo WebSocket.
+The optional `request_id` makes retries idempotent: a completed request returns its saved assistant event instead of generating a second response. The response includes the saved user/assistant event IDs, assistant content, provider label, and model ID. The browser exposes an unchecked-by-default privacy toggle for private memory/knowledge retrieval. When `include_private_context` is true, retrieval is scoped to the authenticated owner and the selected results are sent to the configured provider as untrusted reference data, capped at 12,000 characters. When false, no personal memory or knowledge records are retrieved for the provider. The current conversation messages are sent to the provider in either case. If no provider is configured, the endpoint returns HTTP 503 and does not silently fall back to the scripted demo WebSocket.
 
 ## Authentication and ownership
 
