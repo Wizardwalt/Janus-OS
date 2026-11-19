@@ -1,6 +1,7 @@
 //! HTTP/WebSocket API server.
 
 use crate::{
+    aria_provider::{AriaModelProvider, AriaProviderMessage},
     executor::{PluginExecutor, PluginSummary},
     hardware::{HardwareAdapterStatus, HardwareManager},
     state::StateManager,
@@ -30,6 +31,8 @@ pub struct ApiState {
     executor: Arc<PluginExecutor>,
     hardware: Arc<HardwareManager>,
     aria: Arc<Mutex<AriaRuntimeStores>>,
+    aria_provider: Option<AriaModelProvider>,
+    aria_chat_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 struct AriaRuntimeStores {
@@ -122,6 +125,22 @@ struct AriaMemoryRequest {
     source_refs:Vec<String>,
     #[serde(default)]
     expires_at:Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize)]
+struct AriaChatRequest {
+    conversation_id: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct AriaChatResponse {
+    conversation_id: String,
+    user_event_id: String,
+    assistant_event_id: String,
+    content: String,
+    provider: String,
+    model: String,
 }
 
 #[derive(Deserialize)]
@@ -329,15 +348,18 @@ impl ApiServer {
     }
 
     pub async fn start(self) -> Result<()> {
-        let aria_path=self.config.db_path.with_extension("aria.sqlite");
-        let aria=AriaRuntimeStores::open(&aria_path)
-            .with_context(||format!("opening Aria stores at {}",aria_path.display()))?;
+        let aria_path = self.config.db_path.with_extension("aria.sqlite");
+        let aria = AriaRuntimeStores::open(&aria_path)
+            .with_context(|| format!("opening Aria stores at {}", aria_path.display()))?;
+        let aria_provider = AriaModelProvider::from_environment()?;
         let api_state = ApiState {
             config: self.config.clone(),
             state_manager: self.state_manager,
             executor: self.executor,
             hardware: self.hardware,
-            aria:Arc::new(Mutex::new(aria)),
+            aria: Arc::new(Mutex::new(aria)),
+            aria_provider,
+            aria_chat_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
 
         let allowed_origins = self
@@ -355,6 +377,7 @@ impl ApiServer {
         let app = Router::new()
             .route("/aria/artifacts/text", post(aria_import_text))
             .route("/aria/search", get(aria_search))
+            .route("/aria/chat", post(aria_chat))
             .route("/aria/conversations", get(aria_conversation_list))
             .route(
                 "/aria/conversations/:conversation_id/events",
@@ -501,6 +524,122 @@ async fn aria_search(
     }
 }
 
+
+async fn aria_chat(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+    Json(request): Json<AriaChatRequest>,
+) -> (StatusCode, Json<ApiResponse<AriaChatResponse>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account,
+        Err(error) => return unauthorized_response(error),
+    };
+    if request.message.trim().is_empty() || request.message.len() > 64 * 1024 {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            status: "error".into(), data: None,
+            error: Some("message must contain 1..=65536 UTF-8 bytes".into()),
+        }));
+    }
+    let Some(provider) = state.aria_provider.clone() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(ApiResponse {
+            status: "error".into(), data: None,
+            error: Some("no Aria model provider is configured on the runtime".into()),
+        }));
+    };
+
+    // One active turn per runtime prevents concurrent requests from interleaving
+    // user/assistant messages in a shared conversation context.
+    let _turn_guard = state.aria_chat_lock.lock().await;
+    let user_event = ConversationEvent {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        role: "user".into(),
+        content: request.message,
+        provider: None,
+        model: None,
+        created_at: chrono::Utc::now(),
+    };
+    let context = {
+        let mut stores = match state.aria.lock() {
+            Ok(stores) => stores,
+            Err(_) => return aria_store_lock_unavailable(),
+        };
+        let Some(conversations) = stores.conversations.as_mut() else {
+            return aria_conversation_store_unavailable();
+        };
+        if let Err(error) = conversations.append_event(
+            &account.id, &request.conversation_id, &user_event,
+        ) {
+            return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+                status: "error".into(), data: None, error: Some(error.to_string()),
+            }));
+        }
+        match conversations.list_recent_events(&account.id, &request.conversation_id, 20) {
+            Ok(events) => events,
+            Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse {
+                status: "error".into(), data: None, error: Some(error.to_string()),
+            })),
+        }
+    };
+
+    let mut messages = Vec::with_capacity(context.len() + 1);
+    messages.push(AriaProviderMessage {
+        role: "system".into(),
+        content: "You are Aria, the honest, provider-independent assistant for Janus. Be transparent about limitations and never claim actions or tool access you do not have. For cybersecurity, support lawful learning and defensive work on owned, explicitly authorized, or isolated lab systems only. Do not present harmful activity against others as acceptable.".into(),
+    });
+    for event in context {
+        if matches!(event.role.as_str(), "system" | "user" | "assistant") {
+            messages.push(AriaProviderMessage { role: event.role, content: event.content });
+        }
+    }
+
+    let completion = match provider.complete(&messages).await {
+        Ok(completion) => completion,
+        Err(error) => {
+            tracing::warn!(%error, "Aria provider completion failed");
+            return (StatusCode::BAD_GATEWAY, Json(ApiResponse {
+                status: "error".into(), data: None,
+                error: Some("Aria's configured provider did not return a usable response. Your message was saved; you can retry.".into()),
+            }));
+        }
+    };
+    let assistant_event = ConversationEvent {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        role: "assistant".into(),
+        content: completion.content.clone(),
+        provider: Some(completion.provider.clone()),
+        model: Some(completion.model.clone()),
+        created_at: chrono::Utc::now(),
+    };
+    let append_result = match state.aria.lock() {
+        Ok(mut stores) => match stores.conversations.as_mut() {
+            Some(conversations) => conversations.append_event(
+                &account.id, &request.conversation_id, &assistant_event,
+            ),
+            None => return aria_conversation_store_unavailable(),
+        },
+        Err(_) => return aria_store_lock_unavailable(),
+    };
+    if let Err(error) = append_result {
+        tracing::error!(%error, "Failed to persist Aria assistant response");
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse {
+            status: "error".into(), data: None,
+            error: Some("Aria responded, but the assistant message could not be saved.".into()),
+        }));
+    }
+
+    (StatusCode::OK, Json(ApiResponse {
+        status: "success".into(),
+        data: Some(AriaChatResponse {
+            conversation_id: request.conversation_id,
+            user_event_id: user_event.event_id,
+            assistant_event_id: assistant_event.event_id,
+            content: completion.content,
+            provider: completion.provider,
+            model: completion.model,
+        }),
+        error: None,
+    }))
+}
 
 async fn aria_conversation_list(
     AxumState(state): AxumState<ApiState>,
