@@ -45,7 +45,7 @@ impl AriaRuntimeStores {
         if let Some(parent)=path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let data_key = load_aria_memory_key()?;
+        let data_key = load_aria_data_key()?;
         let memory = data_key.as_ref()
             .map(|key| EncryptedMemoryStore::open(path, key))
             .transpose()?;
@@ -62,13 +62,15 @@ impl AriaRuntimeStores {
     }
 }
 
-fn load_aria_memory_key()->Result<Option<[u8;32]>> {
-    let Some(path)=std::env::var_os("JANUS_ARIA_MEMORY_KEY_FILE") else {
+fn load_aria_data_key()->Result<Option<[u8;32]>> {
+    let configured_path = std::env::var_os("JANUS_ARIA_DATA_KEY_FILE")
+        .or_else(|| std::env::var_os("JANUS_ARIA_MEMORY_KEY_FILE"));
+    let Some(path) = configured_path else {
         return Ok(None);
     };
     let path=std::path::PathBuf::from(path);
     let metadata=std::fs::symlink_metadata(&path)
-        .with_context(||format!("reading Aria memory key metadata at {}",path.display()))?;
+        .with_context(||format!("reading Aria data key metadata at {}",path.display()))?;
     if !metadata.file_type().is_file() {
         anyhow::bail!("Aria memory key path must be a regular, non-symlink file");
     }
