@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tracing::info;
 
 mod api;
+mod aria_provider;
 mod backup;
 mod database;
 pub mod device_enrollment;
