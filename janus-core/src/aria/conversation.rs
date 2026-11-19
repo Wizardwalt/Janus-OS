@@ -31,7 +31,7 @@ pub struct ConversationEvent {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConversationSummary {
     pub conversation_id: String,
     pub event_count: usize,
