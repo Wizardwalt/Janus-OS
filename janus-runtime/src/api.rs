@@ -131,6 +131,8 @@ struct AriaMemoryRequest {
 struct AriaChatRequest {
     conversation_id: String,
     message: String,
+    #[serde(default)]
+    request_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -546,14 +548,24 @@ async fn aria_chat(
             error: Some("no Aria model provider is configured on the runtime".into()),
         }));
     };
+    let request_id = request.request_id
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    if request_id.trim().is_empty() || request_id.len() > 140 {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            status: "error".into(), data: None,
+            error: Some("request_id must contain 1..=140 UTF-8 bytes".into()),
+        }));
+    }
+    let user_event_id = format!("user-{request_id}");
+    let assistant_event_id = format!("assistant-{request_id}");
 
     // One active turn per runtime prevents concurrent requests from interleaving
     // user/assistant messages in a shared conversation context.
     let _turn_guard = state.aria_chat_lock.lock().await;
     let user_event = ConversationEvent {
-        event_id: uuid::Uuid::new_v4().to_string(),
+        event_id: user_event_id.clone(),
         role: "user".into(),
-        content: request.message,
+        content: request.message.clone(),
         provider: None,
         model: None,
         created_at: chrono::Utc::now(),
@@ -566,12 +578,52 @@ async fn aria_chat(
         let Some(conversations) = stores.conversations.as_mut() else {
             return aria_conversation_store_unavailable();
         };
-        if let Err(error) = conversations.append_event(
-            &account.id, &request.conversation_id, &user_event,
-        ) {
-            return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+
+        // If the client retries after a lost response, return the already saved
+        // assistant event rather than asking the provider to generate twice.
+        match conversations.get_event(&account.id, &request.conversation_id, &assistant_event_id) {
+            Ok(Some(saved)) if saved.role == "assistant" => {
+                return (StatusCode::OK, Json(ApiResponse {
+                    status: "success".into(),
+                    data: Some(AriaChatResponse {
+                        conversation_id: request.conversation_id,
+                        user_event_id,
+                        assistant_event_id,
+                        content: saved.content,
+                        provider: saved.provider.unwrap_or_else(|| "unknown".into()),
+                        model: saved.model.unwrap_or_else(|| "unknown".into()),
+                    }),
+                    error: None,
+                }));
+            }
+            Ok(Some(_)) => return (StatusCode::CONFLICT, Json(ApiResponse {
+                status: "error".into(), data: None,
+                error: Some("chat request ID is already used by a non-assistant event".into()),
+            })),
+            Ok(None) => {}
+            Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
                 status: "error".into(), data: None, error: Some(error.to_string()),
-            }));
+            })),
+        }
+
+        match conversations.get_event(&account.id, &request.conversation_id, &user_event_id) {
+            Ok(Some(saved)) if saved.role == "user" && saved.content == request.message => {}
+            Ok(Some(_)) => return (StatusCode::CONFLICT, Json(ApiResponse {
+                status: "error".into(), data: None,
+                error: Some("chat request ID was already used with different content".into()),
+            })),
+            Ok(None) => {
+                if let Err(error) = conversations.append_event(
+                    &account.id, &request.conversation_id, &user_event,
+                ) {
+                    return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+                        status: "error".into(), data: None, error: Some(error.to_string()),
+                    }));
+                }
+            }
+            Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+                status: "error".into(), data: None, error: Some(error.to_string()),
+            })),
         }
         match conversations.list_recent_events(&account.id, &request.conversation_id, 20) {
             Ok(events) => events,
@@ -598,12 +650,12 @@ async fn aria_chat(
             tracing::warn!(%error, "Aria provider completion failed");
             return (StatusCode::BAD_GATEWAY, Json(ApiResponse {
                 status: "error".into(), data: None,
-                error: Some("Aria's configured provider did not return a usable response. Your message was saved; you can retry.".into()),
+                error: Some("Aria's configured provider did not return a usable response. Your message was saved; you can retry with the same request_id.".into()),
             }));
         }
     };
     let assistant_event = ConversationEvent {
-        event_id: uuid::Uuid::new_v4().to_string(),
+        event_id: assistant_event_id.clone(),
         role: "assistant".into(),
         content: completion.content.clone(),
         provider: Some(completion.provider.clone()),
@@ -631,8 +683,8 @@ async fn aria_chat(
         status: "success".into(),
         data: Some(AriaChatResponse {
             conversation_id: request.conversation_id,
-            user_event_id: user_event.event_id,
-            assistant_event_id: assistant_event.event_id,
+            user_event_id,
+            assistant_event_id,
             content: completion.content,
             provider: completion.provider,
             model: completion.model,
