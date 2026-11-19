@@ -14,7 +14,7 @@ use axum::{
     Router,
 };
 use janus_core::{
-    aria::{AriaIngestionStore, IngestionAccessScope, KnowledgeAccessScope, KnowledgeStore, LearningProposal, LearningQueue, EncryptedMemoryStore, PersonalMemory, PersonalMemorySearch, ReviewDecision, ReviewReceipt, TextArtifactInput, Hat, KnowledgeSourceType, search_all},
+    aria::{AriaIngestionStore, ConversationEvent, ConversationStore, ConversationSummary, IngestionAccessScope, KnowledgeAccessScope, KnowledgeStore, LearningProposal, LearningQueue, EncryptedMemoryStore, PersonalMemory, PersonalMemorySearch, ReviewDecision, ReviewReceipt, TextArtifactInput, Hat, KnowledgeSourceType, search_all},
     AuditEntry, CertificationStatus, Config, EngagementScope, LicensedFeature, SignedLicense,
     StateKey, UserRole,
 };
@@ -37,6 +37,7 @@ struct AriaRuntimeStores {
     ingestion: AriaIngestionStore,
     learning: LearningQueue,
     memory: Option<EncryptedMemoryStore>,
+    conversations: Option<ConversationStore>,
 }
 
 impl AriaRuntimeStores {
@@ -44,13 +45,19 @@ impl AriaRuntimeStores {
         if let Some(parent)=path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let memory=load_aria_memory_key()?.map(|key|EncryptedMemoryStore::open(path,&key))
+        let data_key = load_aria_memory_key()?;
+        let memory = data_key.as_ref()
+            .map(|key| EncryptedMemoryStore::open(path, key))
+            .transpose()?;
+        let conversations = data_key.as_ref()
+            .map(|key| ConversationStore::open(path, key))
             .transpose()?;
         Ok(Self {
-            knowledge:KnowledgeStore::open(path)?,
-            ingestion:AriaIngestionStore::open(path)?,
-            learning:LearningQueue::open(path)?,
+            knowledge: KnowledgeStore::open(path)?,
+            ingestion: AriaIngestionStore::open(path)?,
+            learning: LearningQueue::open(path)?,
             memory,
+            conversations,
         })
     }
 }
@@ -113,6 +120,29 @@ struct AriaMemoryRequest {
     source_refs:Vec<String>,
     #[serde(default)]
     expires_at:Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize)]
+struct AriaConversationListQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct AriaConversationEventsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct AriaConversationEventRequest {
+    event_id: String,
+    role: String,
+    content: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 
@@ -323,6 +353,12 @@ impl ApiServer {
         let app = Router::new()
             .route("/aria/artifacts/text", post(aria_import_text))
             .route("/aria/search", get(aria_search))
+            .route("/aria/conversations", get(aria_conversation_list))
+            .route(
+                "/aria/conversations/:conversation_id/events",
+                get(aria_conversation_events).post(aria_conversation_append),
+            )
+            .route("/aria/conversations/:conversation_id", delete(aria_conversation_delete))
             .route("/aria/memory", get(aria_memory_list).post(aria_memory_remember))
             .route("/aria/memory/:memory_id/correct", post(aria_memory_correct))
             .route("/aria/memory/:memory_id", delete(aria_memory_forget))
@@ -463,6 +499,138 @@ async fn aria_search(
     }
 }
 
+
+async fn aria_conversation_list(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+    Query(query): Query<AriaConversationListQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<ConversationSummary>>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account,
+        Err(error) => return unauthorized_response(error),
+    };
+    let result = match state.aria.lock() {
+        Ok(stores) => match stores.conversations.as_ref() {
+            Some(store) => store.list_conversations(&account.id, query.limit.unwrap_or(20)),
+            None => return aria_conversation_store_unavailable(),
+        },
+        Err(_) => return aria_store_lock_unavailable(),
+    };
+    match result {
+        Ok(conversations) => (StatusCode::OK, Json(ApiResponse {
+            status: "success".into(), data: Some(conversations), error: None,
+        })),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse {
+            status: "error".into(), data: None, error: Some(error.to_string()),
+        })),
+    }
+}
+
+async fn aria_conversation_events(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+    Query(query): Query<AriaConversationEventsQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<ConversationEvent>>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account,
+        Err(error) => return unauthorized_response(error),
+    };
+    let result = match state.aria.lock() {
+        Ok(stores) => match stores.conversations.as_ref() {
+            Some(store) => store.list_events(
+                &account.id, &conversation_id, query.limit.unwrap_or(100),
+            ),
+            None => return aria_conversation_store_unavailable(),
+        },
+        Err(_) => return aria_store_lock_unavailable(),
+    };
+    match result {
+        Ok(events) => (StatusCode::OK, Json(ApiResponse {
+            status: "success".into(), data: Some(events), error: None,
+        })),
+        Err(error) => (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            status: "error".into(), data: None, error: Some(error.to_string()),
+        })),
+    }
+}
+
+async fn aria_conversation_append(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+    Json(request): Json<AriaConversationEventRequest>,
+) -> (StatusCode, Json<ApiResponse<ConversationEvent>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account,
+        Err(error) => return unauthorized_response(error),
+    };
+    let event = ConversationEvent {
+        event_id: request.event_id,
+        role: request.role,
+        content: request.content,
+        provider: request.provider,
+        model: request.model,
+        created_at: request.created_at.unwrap_or_else(chrono::Utc::now),
+    };
+    let result = match state.aria.lock() {
+        Ok(mut stores) => match stores.conversations.as_mut() {
+            Some(store) => store.append_event(&account.id, &conversation_id, &event),
+            None => return aria_conversation_store_unavailable(),
+        },
+        Err(_) => return aria_store_lock_unavailable(),
+    };
+    match result {
+        Ok(()) => (StatusCode::CREATED, Json(ApiResponse {
+            status: "success".into(), data: Some(event), error: None,
+        })),
+        Err(error) => (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            status: "error".into(), data: None, error: Some(error.to_string()),
+        })),
+    }
+}
+
+async fn aria_conversation_delete(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+) -> (StatusCode, Json<ApiResponse<bool>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account,
+        Err(error) => return unauthorized_response(error),
+    };
+    let result = match state.aria.lock() {
+        Ok(mut stores) => match stores.conversations.as_mut() {
+            Some(store) => store.delete_conversation(&account.id, &conversation_id),
+            None => return aria_conversation_store_unavailable(),
+        },
+        Err(_) => return aria_store_lock_unavailable(),
+    };
+    match result {
+        Ok(true) => (StatusCode::OK, Json(ApiResponse {
+            status: "success".into(), data: Some(true), error: None,
+        })),
+        Ok(false) => (StatusCode::NOT_FOUND, Json(ApiResponse {
+            status: "error".into(), data: Some(false), error: Some("conversation not found".into()),
+        })),
+        Err(error) => (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            status: "error".into(), data: None, error: Some(error.to_string()),
+        })),
+    }
+}
+
+fn aria_conversation_store_unavailable<T>() -> (StatusCode, Json<ApiResponse<T>>) {
+    (StatusCode::SERVICE_UNAVAILABLE, Json(ApiResponse {
+        status: "error".into(), data: None,
+        error: Some("encrypted Aria conversation storage is unavailable; configure the owner-only Aria data key".into()),
+    }))
+}
+
+fn aria_store_lock_unavailable<T>() -> (StatusCode, Json<ApiResponse<T>>) {
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse {
+        status: "error".into(), data: None, error: Some("Aria store lock is unavailable".into()),
+    }))
+}
 
 async fn aria_memory_list(
     AxumState(state):AxumState<ApiState>,headers:HeaderMap,
