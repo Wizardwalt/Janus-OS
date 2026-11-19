@@ -48,7 +48,7 @@ impl ConversationStore {
         Self::from_connection(Connection::open_in_memory()?)
     }
 
-    fn from_connection(connection: Connection) -> Result<Self> {
+    fn from_connection(mut connection: Connection) -> Result<Self> {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
@@ -60,7 +60,7 @@ impl ConversationStore {
                 PRIMARY KEY(owner_id, conversation_id)
             );
             CREATE TABLE IF NOT EXISTS aria_conversation_events (
-                event_id TEXT PRIMARY KEY NOT NULL,
+                event_id TEXT NOT NULL,
                 owner_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,
                 role TEXT NOT NULL,
@@ -70,13 +70,15 @@ impl ConversationStore {
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(owner_id, conversation_id)
                     REFERENCES aria_conversations(owner_id, conversation_id)
-                    ON DELETE CASCADE
+                    ON DELETE CASCADE,
+                PRIMARY KEY(owner_id, event_id)
             );
             CREATE INDEX IF NOT EXISTS idx_aria_conversation_events_owner_time
                 ON aria_conversation_events(owner_id, conversation_id, created_at, event_id);
             CREATE INDEX IF NOT EXISTS idx_aria_conversations_owner_updated
                 ON aria_conversations(owner_id, updated_at DESC);",
         )?;
+        migrate_event_identity_scope(&mut connection)?;
         Ok(Self { connection })
     }
 
@@ -212,6 +214,58 @@ impl ConversationStore {
     }
 }
 
+/// Upgrade databases created before event IDs were scoped to an owner.
+/// The migration is transactional and preserves all existing conversation events.
+fn migrate_event_identity_scope(connection: &mut Connection) -> Result<()> {
+    let mut statement = connection.prepare("PRAGMA table_info(aria_conversation_events)")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+    })?;
+    let mut primary_key_columns = rows
+        .map(|row| row.map(|(name, position)| (position, name)))
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    primary_key_columns.sort_by_key(|(position, _)| *position);
+    let primary_key_columns = primary_key_columns
+        .into_iter()
+        .map(|(_, name)| name)
+        .collect::<Vec<_>>();
+
+    if primary_key_columns == ["event_id"] {
+        let tx = connection.transaction()?;
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS idx_aria_conversation_events_owner_time;
+             ALTER TABLE aria_conversation_events RENAME TO aria_conversation_events_legacy;
+             CREATE TABLE aria_conversation_events (
+                event_id TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                provider TEXT,
+                model TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(owner_id, conversation_id)
+                    REFERENCES aria_conversations(owner_id, conversation_id)
+                    ON DELETE CASCADE,
+                PRIMARY KEY(owner_id, event_id)
+             );
+             INSERT INTO aria_conversation_events
+                (event_id, owner_id, conversation_id, role, content, provider, model, created_at)
+             SELECT event_id, owner_id, conversation_id, role, content, provider, model, created_at
+             FROM aria_conversation_events_legacy;
+             DROP TABLE aria_conversation_events_legacy;
+             CREATE INDEX idx_aria_conversation_events_owner_time
+                ON aria_conversation_events(owner_id, conversation_id, created_at, event_id);",
+        )?;
+        tx.commit()?;
+    } else if primary_key_columns != ["owner_id", "event_id"] {
+        anyhow::bail!(
+            "unsupported aria_conversation_events primary key: {primary_key_columns:?}"
+        );
+    }
+    Ok(())
+}
+
 fn validate_identifier(value: &str, max_bytes: usize, name: &str) -> Result<()> {
     if value.trim().is_empty() || value.len() > max_bytes {
         return Err(anyhow!("{name} must contain 1..={max_bytes} bytes"));
@@ -253,6 +307,60 @@ mod tests {
         assert_eq!(store.list_events("bob", "chat-1", 20).unwrap().len(), 1);
         assert!(store.list_events("mallory", "chat-1", 20).unwrap().is_empty());
         assert_eq!(store.list_conversations("alice", 20).unwrap()[0].event_count, 2);
+    }
+
+    #[test]
+    fn event_identifiers_are_scoped_to_their_owner() {
+        let mut store = ConversationStore::in_memory().unwrap();
+        let now = Utc::now();
+        store.append_event("alice", "chat-a", &event("shared-event", "user", "alice", now)).unwrap();
+        store.append_event("bob", "chat-b", &event("shared-event", "user", "bob", now)).unwrap();
+
+        assert_eq!(store.list_events("alice", "chat-a", 20).unwrap()[0].content, "alice");
+        assert_eq!(store.list_events("bob", "chat-b", 20).unwrap()[0].content, "bob");
+    }
+
+    #[test]
+    fn migrates_legacy_global_event_ids_without_losing_history() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "janus-aria-conversation-migration-{}-{unique}", std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database_path = directory.join("conversations.sqlite");
+        {
+            let connection = Connection::open(&database_path).unwrap();
+            connection.execute_batch(
+                "PRAGMA foreign_keys=ON;
+                 CREATE TABLE aria_conversations (
+                    owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(owner_id, conversation_id)
+                 );
+                 CREATE TABLE aria_conversation_events (
+                    event_id TEXT PRIMARY KEY NOT NULL, owner_id TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL,
+                    provider TEXT, model TEXT, created_at TEXT NOT NULL,
+                    FOREIGN KEY(owner_id, conversation_id)
+                    REFERENCES aria_conversations(owner_id, conversation_id) ON DELETE CASCADE
+                 );
+                 CREATE INDEX idx_aria_conversation_events_owner_time
+                    ON aria_conversation_events(owner_id, conversation_id, created_at, event_id);
+                 INSERT INTO aria_conversations VALUES ('alice','chat-a','2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00');
+                 INSERT INTO aria_conversation_events VALUES ('shared-event','alice','chat-a','user','preserved',NULL,NULL,'2026-01-01T00:00:00+00:00');"
+            ).unwrap();
+        }
+
+        let mut store = ConversationStore::open(&database_path).unwrap();
+        let now = Utc::now();
+        store.append_event("bob", "chat-b", &event("shared-event", "user", "new owner", now)).unwrap();
+        assert_eq!(store.list_events("alice", "chat-a", 20).unwrap()[0].content, "preserved");
+        assert_eq!(store.list_events("bob", "chat-b", 20).unwrap()[0].content, "new owner");
+
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
