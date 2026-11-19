@@ -72,26 +72,26 @@ fn load_aria_data_key()->Result<Option<[u8;32]>> {
     let metadata=std::fs::symlink_metadata(&path)
         .with_context(||format!("reading Aria data key metadata at {}",path.display()))?;
     if !metadata.file_type().is_file() {
-        anyhow::bail!("Aria memory key path must be a regular, non-symlink file");
+        anyhow::bail!("Aria data key path must be a regular, non-symlink file");
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if metadata.permissions().mode() & 0o077 != 0 {
-            anyhow::bail!("Aria memory key file permissions must be owner-only (0600)");
+            anyhow::bail!("Aria data key file permissions must be owner-only (0600)");
         }
     }
     let encoded=std::fs::read_to_string(&path)
-        .with_context(||format!("reading Aria memory key file at {}",path.display()))?;
+        .with_context(||format!("reading Aria data key file at {}",path.display()))?;
     let encoded=encoded.trim();
     if encoded.len()!=64 {
-        anyhow::bail!("Aria memory key file must contain exactly 64 hexadecimal characters");
+        anyhow::bail!("Aria data key file must contain exactly 64 hexadecimal characters");
     }
     let mut key=[0u8;32];
     for (index,pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
         let hex=std::str::from_utf8(pair)?;
         key[index]=u8::from_str_radix(hex,16)
-            .context("Aria memory key file contains non-hexadecimal data")?;
+            .context("Aria data key file contains non-hexadecimal data")?;
     }
     Ok(Some(key))
 }
@@ -647,7 +647,7 @@ async fn aria_memory_list(
                 Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
             },
             None=>(StatusCode::SERVICE_UNAVAILABLE,Json(ApiResponse {
-                status:"error".into(),data:None,error:Some("encrypted personal memory is disabled; configure JANUS_ARIA_MEMORY_KEY_FILE".into())
+                status:"error".into(),data:None,error:Some("encrypted Aria private data is disabled; configure JANUS_ARIA_DATA_KEY_FILE (or legacy JANUS_ARIA_MEMORY_KEY_FILE)".into())
             })),
         },
         Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
@@ -683,7 +683,7 @@ async fn aria_memory_remember(
                 Err(error)=>(StatusCode::BAD_REQUEST,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
             },
             None=>(StatusCode::SERVICE_UNAVAILABLE,Json(ApiResponse {
-                status:"error".into(),data:None,error:Some("encrypted personal memory is disabled; configure JANUS_ARIA_MEMORY_KEY_FILE".into())
+                status:"error".into(),data:None,error:Some("encrypted Aria private data is disabled; configure JANUS_ARIA_DATA_KEY_FILE (or legacy JANUS_ARIA_MEMORY_KEY_FILE)".into())
             })),
         },
         Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
@@ -714,7 +714,7 @@ async fn aria_memory_correct(
                 Err(error)=>(StatusCode::NOT_FOUND,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
             },
             None=>(StatusCode::SERVICE_UNAVAILABLE,Json(ApiResponse {
-                status:"error".into(),data:None,error:Some("encrypted personal memory is disabled; configure JANUS_ARIA_MEMORY_KEY_FILE".into())
+                status:"error".into(),data:None,error:Some("encrypted Aria private data is disabled; configure JANUS_ARIA_DATA_KEY_FILE (or legacy JANUS_ARIA_MEMORY_KEY_FILE)".into())
             })),
         },
         Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
@@ -736,7 +736,7 @@ async fn aria_memory_forget(
                 Err(error)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {status:"error".into(),data:None,error:Some(error.to_string())})),
             },
             None=>(StatusCode::SERVICE_UNAVAILABLE,Json(ApiResponse {
-                status:"error".into(),data:None,error:Some("encrypted personal memory is disabled; configure JANUS_ARIA_MEMORY_KEY_FILE".into())
+                status:"error".into(),data:None,error:Some("encrypted Aria private data is disabled; configure JANUS_ARIA_DATA_KEY_FILE (or legacy JANUS_ARIA_MEMORY_KEY_FILE)".into())
             })),
         },
         Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR,Json(ApiResponse {
