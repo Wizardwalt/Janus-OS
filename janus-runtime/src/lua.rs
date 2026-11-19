@@ -48,6 +48,10 @@ impl LuaEnv {
     }
 }
 
+/// Maximum Lua VM heap per plugin execution. This is a VM allocator limit,
+/// not an operating-system process or total-runtime memory limit.
+const MAX_PLUGIN_LUA_MEMORY_BYTES: usize = 16 * 1024 * 1024;
+
 /// A short-lived Lua sandbox for one plugin request.
 pub struct PluginSandbox;
 
@@ -73,6 +77,9 @@ impl PluginSandbox {
             "plugin input exceeds the 256 KiB limit"
         );
         let lua = Lua::new();
+        // mlua 0.9's Lua 5.4 allocator enforces this cap on VM allocations.
+        // Keep it separate from JSON byte limits and the instruction budget.
+        lua.set_memory_limit(MAX_PLUGIN_LUA_MEMORY_BYTES)?;
 
         // Explicitly remove ambient loaders and process/debug libraries even if
         // the selected Lua build exposes them as safe standard globals.
@@ -270,6 +277,15 @@ mod tests {
             .execute("return { payload = string.rep('x', 256 * 1024) }", serde_json::json!({}))
             .unwrap_err();
         assert!(error.to_string().contains("output exceeds the 256 KiB limit"));
+    }
+
+    #[test]
+    fn plugin_sandbox_enforces_a_hard_lua_heap_limit() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let error = sandbox
+            .execute("return string.rep('x', 32 * 1024 * 1024)", serde_json::json!({}))
+            .unwrap_err();
+        assert!(error.to_string().to_lowercase().contains("memory"));
     }
 
     #[test]
