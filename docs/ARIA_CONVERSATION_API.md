@@ -1,10 +1,10 @@
 # Aria Authenticated Conversation API
 
-**Status:** Authenticated API and encrypted storage integration. The browser chat UI and a live model provider are not connected by this change.
+**Status:** Encrypted conversation storage, authenticated runtime endpoints, an OpenAI-compatible provider adapter, and browser chat/history controls are implemented in this branch. Live inference requires a configured provider and protected data key.
 
-## Storage and key configuration
+## Encrypted storage and key configuration
 
-The runtime opens the encrypted conversation store only when an Aria data key is configured. Set:
+Set:
 
 ```sh
 JANUS_ARIA_DATA_KEY_FILE=/absolute/path/to/aria-data.key
@@ -15,6 +15,42 @@ The file must contain exactly 64 hexadecimal characters (32 bytes). On Unix-like
 The key is supplied by the host and is never stored in SQLite. Aria derives a separate conversation-encryption key from it using SHA-256 domain separation. Conversation event payloads are encrypted with XChaCha20-Poly1305. Owner ID, conversation ID, event ID, and timestamp are authenticated as associated data. Those identifiers and timestamps remain queryable metadata; message content, role, provider, and model are encrypted.
 
 Without the key, the runtime does not silently fall back to plaintext conversation storage. Conversation endpoints return HTTP 503. Existing plaintext rows are migrated transactionally when the key is configured; a failed migration leaves the old table intact.
+
+## Model provider configuration
+
+The runtime supports an OpenAI-compatible Chat Completions endpoint. Configure both:
+
+```sh
+JANUS_ARIA_PROVIDER_CHAT_COMPLETIONS_URL=https://provider.example/v1/chat/completions
+JANUS_ARIA_PROVIDER_MODEL=your-model-id
+JANUS_ARIA_PROVIDER_NAME=provider-label
+JANUS_ARIA_PROVIDER_API_KEY_FILE=/absolute/path/to/provider-api-key
+```
+
+The provider name and API-key file are optional; endpoint and model must be configured together. The API-key file, when used, must be a regular non-symlink file, 1..=4096 bytes, and owner-only (0600) on Unix. Keep it on the runtime host; it is never sent to the browser or stored in conversation history.
+
+HTTPS is required for remote providers. Plain HTTP is accepted only for loopback providers such as a local Ollama-compatible service. Redirects are disabled, connection timeout is 10 seconds, request timeout is 60 seconds, and provider responses are capped at 2 MiB. No provider is selected or configured by this repository.
+
+## Chat endpoint
+
+- `POST /aria/chat` — authenticated, encrypted, provider-backed chat turn.
+
+Request:
+
+```json
+{
+  "conversation_id": "main",
+  "message": "Explain the difference between a MOSFET and a BJT.",
+  "request_id": "client-generated-unique-id",
+  "include_private_context": false
+}
+```
+
+The optional `request_id` makes retries idempotent: a completed request returns its saved assistant event instead of generating a second response. The response includes saved user/assistant event IDs, assistant content, provider label, and model ID.
+
+The browser exposes an unchecked-by-default privacy toggle for private memory and knowledge retrieval. When `include_private_context` is true, retrieval is scoped to the authenticated owner and selected results are sent to the configured provider as untrusted reference data, capped at 12,000 characters. When false, no personal memory or knowledge records are retrieved for the provider. The current conversation messages are sent to the provider in either case. The UI clearly labels the legacy WebSocket path as scripted demo mode and does not silently fall back to it after sign-in.
+
+The runtime saves the user message before provider dispatch and saves the assistant response before returning success. If the provider fails, the user message remains saved and the endpoint returns HTTP 502; retry using the same request ID. Only one chat turn runs at a time per runtime to prevent concurrent turns from interleaving.
 
 ## Authentication and ownership
 
@@ -47,12 +83,10 @@ Append request example:
 
 `created_at` is optional and defaults to the runtime's current UTC time. Roles are restricted by the storage layer to `system`, `user`, `assistant`, or `tool`. Event IDs are unique within an owner namespace, not globally.
 
-## Remaining integration gates
+## Remaining production gates
 
-1. Add authenticated browser/UI calls for list, append, load, and delete.
-2. Connect a provider-neutral server-side model adapter; keep provider credentials out of browser assets and local storage.
-3. Persist the user message before provider dispatch and persist the assistant response before acknowledging completion.
-4. Add end-to-end API tests for missing/expired sessions, cross-owner access, unavailable key configuration, append/read/delete, and interrupted provider calls.
-5. Add owner-facing retention, export, and deletion controls before production release.
-
-A passing compile or storage test does not complete these UI, provider, or operational gates.
+1. Add end-to-end API tests for missing/expired sessions, cross-owner access, unavailable key/provider configuration, idempotent retries, append/read/delete, and interrupted provider calls.
+2. Add owner-facing retention, export, and deletion controls before production release.
+3. Verify compatibility against the actual configured provider/model and perform a real end-to-end chat test.
+4. Complete deployment hardening, monitoring, backup/restore drills, and user acceptance.
+5. Tool execution, voice, and autonomous device actions are not implemented by this provider adapter and must receive separate permission/security designs.

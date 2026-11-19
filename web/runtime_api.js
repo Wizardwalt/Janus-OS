@@ -64,9 +64,8 @@ class JanusRuntimeApi {
   plugins() { return this.request('/plugins'); }
   hardwareStatus() { return this.request('/hardware/status'); }
 
-  // Aria knowledge and memory APIs are authenticated independently of the
-  // demo WebSocket chat. These methods expose real persisted operations; they
-  // do not imply that a model provider is connected to the chat interface.
+  // Aria knowledge, encrypted history, and provider-backed chat APIs. The
+  // legacy WebSocket path remains explicitly labeled as scripted demo mode.
   ariaImportText(title, text) {
     return this.request('/aria/artifacts/text', {
       method: 'POST', body: JSON.stringify({ title, text }),
@@ -75,6 +74,28 @@ class JanusRuntimeApi {
   ariaSearch(query, limit = 20) {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return this.request(`/aria/search?${params.toString()}`);
+  }
+  ariaChat(conversationId, message, requestId = null, includePrivateContext = false) {
+    const id = requestId || window.crypto?.randomUUID?.()
+      || `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return this.request('/aria/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        message,
+        request_id: id,
+        include_private_context: Boolean(includePrivateContext),
+      }),
+    });
+  }
+  ariaConversations(limit = 20) {
+    return this.request(`/aria/conversations?limit=${encodeURIComponent(String(limit))}`);
+  }
+  ariaConversationEvents(conversationId, limit = 100) {
+    return this.request(`/aria/conversations/${encodeURIComponent(conversationId)}/events?limit=${encodeURIComponent(String(limit))}`);
+  }
+  ariaDeleteConversation(conversationId) {
+    return this.request(`/aria/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
   }
   ariaRemember(content, sourceRefs = [], expiresAt = null) {
     return this.request('/aria/memory', {
