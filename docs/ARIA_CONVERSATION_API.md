@@ -1,6 +1,6 @@
 # Aria Authenticated Conversation API
 
-**Status:** Authenticated encrypted conversation storage and a server-side OpenAI-compatible provider adapter are available. The browser chat UI still needs to be connected to the live chat endpoint.
+**Status:** Authenticated encrypted conversation storage, a server-side OpenAI-compatible provider adapter, and browser chat/history controls are implemented in this branch. The live path requires a configured provider and full CI verification.
 
 ## Storage and key configuration
 
@@ -40,11 +40,12 @@ Request:
 ```json
 {
   "conversation_id": "main",
-  "message": "Explain the difference between a MOSFET and a BJT."
+  "message": "Explain the difference between a MOSFET and a BJT.",
+  "request_id": "client-generated-unique-id"
 }
 ```
 
-The response includes the saved user/assistant event IDs, assistant content, provider label, and model ID. If no provider is configured, the endpoint returns HTTP 503 and does not silently fall back to the scripted demo WebSocket.
+The optional `request_id` makes retries idempotent: a completed request returns its saved assistant event instead of generating a second response. The response includes the saved user/assistant event IDs, assistant content, provider label, and model ID. If no provider is configured, the endpoint returns HTTP 503 and does not silently fall back to the scripted demo WebSocket.
 
 ## Authentication and ownership
 
