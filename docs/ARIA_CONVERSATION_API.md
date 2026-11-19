@@ -1,6 +1,6 @@
 # Aria Authenticated Conversation API
 
-**Status:** Authenticated API and encrypted storage integration. The browser chat UI and a live model provider are not connected by this change.
+**Status:** Authenticated encrypted conversation storage and a server-side OpenAI-compatible provider adapter are available. The browser chat UI still needs to be connected to the live chat endpoint.
 
 ## Storage and key configuration
 
@@ -15,6 +15,36 @@ The file must contain exactly 64 hexadecimal characters (32 bytes). On Unix-like
 The key is supplied by the host and is never stored in SQLite. Aria derives a separate conversation-encryption key from it using SHA-256 domain separation. Conversation event payloads are encrypted with XChaCha20-Poly1305. Owner ID, conversation ID, event ID, and timestamp are authenticated as associated data. Those identifiers and timestamps remain queryable metadata; message content, role, provider, and model are encrypted.
 
 Without the key, the runtime does not silently fall back to plaintext conversation storage. Conversation endpoints return HTTP 503. Existing plaintext rows are migrated transactionally when the key is configured; a failed migration leaves the old table intact.
+
+## Model provider configuration
+
+The runtime supports an OpenAI-compatible Chat Completions endpoint. Configure both:
+
+```sh
+JANUS_ARIA_PROVIDER_CHAT_COMPLETIONS_URL=https://provider.example/v1/chat/completions
+JANUS_ARIA_PROVIDER_MODEL=your-model-id
+JANUS_ARIA_PROVIDER_NAME=provider-label
+JANUS_ARIA_PROVIDER_API_KEY_FILE=/absolute/path/to/provider-api-key
+```
+
+The provider name and API-key file are optional; the endpoint and model must be configured together. The API-key file, when used, must be a regular non-symlink file, 1..=4096 bytes, and owner-only (0600) on Unix. Keep it on the runtime host; it is never sent to the browser or stored in conversation history. HTTPS is required for remote providers. Plain HTTP is accepted only for loopback providers such as a local Ollama-compatible service. Redirects are disabled, connection timeout is 10 seconds, request timeout is 60 seconds, and provider responses are capped at 2 MiB.
+
+The runtime stores the user message before sending it to the provider, then stores the assistant response before returning success. If the provider fails, the user message remains saved and the endpoint returns HTTP 502 with a retry message. Only one chat turn runs at a time per runtime to prevent concurrent turns from interleaving. The provider receives a host-controlled system instruction and the newest 20 user/assistant events; stored system/tool events are not forwarded as system instructions.
+
+## Chat endpoint
+
+- `POST /aria/chat` — authenticated, encrypted, provider-backed chat turn.
+
+Request:
+
+```json
+{
+  "conversation_id": "main",
+  "message": "Explain the difference between a MOSFET and a BJT."
+}
+```
+
+The response includes the saved user/assistant event IDs, assistant content, provider label, and model ID. If no provider is configured, the endpoint returns HTTP 503 and does not silently fall back to the scripted demo WebSocket.
 
 ## Authentication and ownership
 
