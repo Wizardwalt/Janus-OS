@@ -221,9 +221,13 @@ fn migrate_event_identity_scope(connection: &mut Connection) -> Result<()> {
     let rows = statement.query_map([], |row| {
         Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
     })?;
-    let mut primary_key_columns = rows
-        .map(|row| row.map(|(name, position)| (position, name)))
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut primary_key_columns = Vec::new();
+    for row in rows {
+        let (name, position) = row?;
+        if position > 0 {
+            primary_key_columns.push((position, name));
+        }
+    }
     primary_key_columns.sort_by_key(|(position, _)| *position);
     let primary_key_columns = primary_key_columns
         .into_iter()
