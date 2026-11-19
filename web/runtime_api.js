@@ -76,6 +76,21 @@ class JanusRuntimeApi {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return this.request(`/aria/search?${params.toString()}`);
   }
+  ariaChat(conversationId, message) {
+    return this.request('/aria/chat', {
+      method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId, message }),
+    });
+  }
+  ariaConversations(limit = 20) {
+    return this.request(`/aria/conversations?limit=${encodeURIComponent(String(limit))}`);
+  }
+  ariaConversationEvents(conversationId, limit = 100) {
+    return this.request(`/aria/conversations/${encodeURIComponent(conversationId)}/events?limit=${encodeURIComponent(String(limit))}`);
+  }
+  ariaDeleteConversation(conversationId) {
+    return this.request(`/aria/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
+  }
   ariaRemember(content, sourceRefs = [], expiresAt = null) {
     return this.request('/aria/memory', {
       method: 'POST',
