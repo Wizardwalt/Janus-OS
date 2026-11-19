@@ -170,6 +170,18 @@ async function sendLiveAriaMessage(message, surface) {
       ? 'Live provider or encrypted storage is not configured on the runtime.'
       : error.message;
     const message = `Live Aria request failed: ${detail}`;
+    if (error.status === 502) {
+      const selector = document.getElementById('aria-history-select');
+      if (selector && !Array.from(selector.options).some(option => option.value === activeAriaConversationId)) {
+        const option = document.createElement('option');
+        option.value = activeAriaConversationId;
+        option.textContent = 'Conversation · response pending';
+        option.dataset.saved = 'true';
+        selector.add(option);
+        selector.value = activeAriaConversationId;
+      }
+      updateAriaHistoryControls();
+    }
     if (isView) appendAriaViewChat('ARIA SYSTEM', message);
     else appendAriaChat('ARIA SYSTEM', message);
     setAriaModeLabel(error.status === 503 ? 'LIVE PROVIDER NOT CONFIGURED' : 'LIVE SERVICE ERROR');
