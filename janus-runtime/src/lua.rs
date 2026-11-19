@@ -35,9 +35,12 @@ impl LuaEnv {
         // These globals can catch instruction-hook errors or create child
         // threads without inheriting the current-thread hook.
         let globals = lua.globals();
-        globals.set("coroutine", LuaValue::Nil)?;
-        globals.set("pcall", LuaValue::Nil)?;
-        globals.set("xpcall", LuaValue::Nil)?;
+        for name in [
+            "os", "io", "package", "debug", "require", "dofile", "loadfile",
+            "load", "loadstring", "coroutine", "collectgarbage", "pcall", "xpcall",
+        ] {
+            globals.set(name, LuaValue::Nil)?;
+        }
         drop(globals);
         Ok(Self { lua, remaining_instructions })
     }
