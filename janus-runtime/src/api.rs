@@ -824,6 +824,7 @@ async fn aria_conversation_append(
         Ok(account) => account,
         Err(error) => return unauthorized_response(error),
     };
+    let _turn_guard = state.aria_chat_lock.lock().await;
     let event = ConversationEvent {
         event_id: request.event_id,
         role: request.role,
@@ -858,6 +859,7 @@ async fn aria_conversation_delete(
         Ok(account) => account,
         Err(error) => return unauthorized_response(error),
     };
+    let _turn_guard = state.aria_chat_lock.lock().await;
     let result = match state.aria.lock() {
         Ok(mut stores) => match stores.conversations.as_mut() {
             Some(store) => store.delete_conversation(&account.id, &conversation_id),
