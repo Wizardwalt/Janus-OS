@@ -269,6 +269,46 @@ mod tests {
     }
 
     #[test]
+    fn conversation_events_survive_database_reopen() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "janus-aria-conversation-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database_path = directory.join("conversations.sqlite");
+        let now = Utc::now();
+
+        {
+            let mut store = ConversationStore::open(&database_path).unwrap();
+            store
+                .append_event(
+                    "alice",
+                    "persistent-chat",
+                    &event("persistent-event", "assistant", "persisted reply", now),
+                )
+                .unwrap();
+        }
+
+        let reopened = ConversationStore::open(&database_path).unwrap();
+        let events = reopened.list_events("alice", "persistent-chat", 20).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "persistent-event");
+        assert_eq!(events[0].content, "persisted reply");
+        assert_eq!(events[0].provider.as_deref(), Some("local-openai-compatible"));
+        assert_eq!(events[0].model.as_deref(), Some("test-model"));
+        assert_eq!(events[0].created_at, now);
+
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn rejects_invalid_roles_and_oversized_content() {
         let mut store = ConversationStore::in_memory().unwrap();
         let now = Utc::now();
