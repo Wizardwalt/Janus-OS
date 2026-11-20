@@ -8,16 +8,22 @@ import android.view.KeyEvent
 import android.webkit.*
 import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
+import org.json.JSONObject
 
 class JanusWebActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private lateinit var prefs: android.content.SharedPreferences
+    private var pendingAriaImport: Pair<String, String>? = null
+    private var ariaImportInjectionStarted = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        pendingAriaImport = intent.getStringExtra(HomeActivity.EXTRA_ARIA_IMPORT_TITLE)?.let { title ->
+            intent.getStringExtra(HomeActivity.EXTRA_ARIA_IMPORT_TEXT)?.let { text -> title to text }
+        }
         prefs = getSharedPreferences("janus_prefs", Context.MODE_PRIVATE)
 
         val frame = FrameLayout(this)
@@ -56,6 +62,9 @@ class JanusWebActivity : AppCompatActivity() {
                     "m.content='width=device-width,initial-scale=1,maximum-scale=1';" +
                     "document.head.appendChild(m);}", null
                 )
+                if (url.startsWith(getServerUrl().trimEnd('/'))) {
+                    startPendingAriaImport(view)
+                }
             }
 
             override fun onReceivedError(
@@ -71,6 +80,62 @@ class JanusWebActivity : AppCompatActivity() {
         webView.webChromeClient = WebChromeClient()
 
         webView.loadUrl(getServerUrl())
+    }
+
+    /**
+     * Keep the Janus bearer token inside the authenticated WebView session.
+     * OmniVault never receives or handles Janus credentials. The import is
+     * attempted only after the user has an active Janus session.
+     */
+    private fun startPendingAriaImport(view: WebView) {
+        val pending = pendingAriaImport ?: return
+        if (ariaImportInjectionStarted) return
+        ariaImportInjectionStarted = true
+        pendingAriaImport = null
+        intent.removeExtra(HomeActivity.EXTRA_ARIA_IMPORT_TITLE)
+        intent.removeExtra(HomeActivity.EXTRA_ARIA_IMPORT_TEXT)
+
+        val title = JSONObject.quote(pending.first)
+        val text = JSONObject.quote(pending.second)
+        val script = """
+            (function () {
+              const title = $title;
+              const text = $text;
+              let attempts = 0;
+              async function submitWhenSignedIn() {
+                const token = sessionStorage.getItem('janus.sessionToken');
+                if (!token) {
+                  attempts += 1;
+                  if (attempts < 120) {
+                    setTimeout(submitWhenSignedIn, 1000);
+                  } else {
+                    alert('OmniVault transfer is ready, but Janus sign-in was not detected. Sign in and share the conversation again.');
+                  }
+                  return;
+                }
+                const base = (localStorage.getItem('janus.runtimeUrl') || location.origin).replace(//+$/, '');
+                try {
+                  const response = await fetch(base + '/aria/artifacts/text', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': 'Bearer ' + token
+                    },
+                    body: JSON.stringify({ title: title, text: text })
+                  });
+                  const payload = await response.json().catch(() => ({}));
+                  if (!response.ok) {
+                    throw new Error(payload.error || ('Runtime returned HTTP ' + response.status));
+                  }
+                  alert('Imported into Aria as a private knowledge artifact.');
+                } catch (error) {
+                  alert('Aria import failed: ' + (error && error.message ? error.message : 'Runtime unavailable.'));
+                }
+              }
+              submitWhenSignedIn();
+            })();
+        """.trimIndent()
+        view.evaluateJavascript(script, null)
     }
 
     private fun getServerUrl(): String {
