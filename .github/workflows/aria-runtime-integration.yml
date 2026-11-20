@@ -2,7 +2,7 @@ name: Aria encrypted runtime integration
 
 on:
   push:
-    branches: [main, feature/omnivault-aria-import]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
