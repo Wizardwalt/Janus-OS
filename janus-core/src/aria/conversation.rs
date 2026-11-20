@@ -224,6 +224,59 @@ impl ConversationStore {
         }).transpose()
     }
 
+    /// Read the next chronological event page after an owner-scoped event cursor.
+    /// The cursor event must belong to the same owner and conversation.
+    pub fn list_events_after(
+        &self,
+        owner_id: &str,
+        conversation_id: &str,
+        after_event_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ConversationEvent>> {
+        validate_identifier(owner_id, MAX_OWNER_ID_BYTES, "owner_id")?;
+        validate_identifier(conversation_id, MAX_CONVERSATION_ID_BYTES, "conversation_id")?;
+        if let Some(cursor) = after_event_id {
+            validate_identifier(cursor, MAX_EVENT_ID_BYTES, "after_event_id")?;
+        }
+        let limit = limit.clamp(1, 1_000);
+        let mut statement = self.connection.prepare(
+            "SELECT event_id, nonce, ciphertext, created_at
+             FROM aria_conversation_events
+             WHERE owner_id = ?1 AND conversation_id = ?2
+               AND (?3 IS NULL OR (created_at, event_id) > (
+                    SELECT created_at, event_id FROM aria_conversation_events
+                    WHERE owner_id = ?1 AND conversation_id = ?2 AND event_id = ?3
+               ))
+             ORDER BY created_at ASC, event_id ASC LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            params![owner_id, conversation_id, after_event_id, limit as i64],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+            )),
+        )?;
+        let encrypted = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        if after_event_id.is_some() && encrypted.is_empty() {
+            let cursor_exists: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM aria_conversation_events
+                 WHERE owner_id = ?1 AND conversation_id = ?2 AND event_id = ?3)",
+                params![owner_id, conversation_id, after_event_id],
+                |row| row.get(0),
+            )?;
+            if !cursor_exists {
+                anyhow::bail!("conversation cursor was not found for this owner and conversation");
+            }
+        }
+        encrypted.into_iter().map(|(event_id, nonce, ciphertext, created_at)| {
+            decrypt_event(
+                &self.key, owner_id, conversation_id, &event_id, &created_at, &nonce, &ciphertext,
+            )
+        }).collect()
+    }
+
     /// Return the newest events for provider context, in chronological order.
     pub fn list_recent_events(
         &self,
@@ -515,6 +568,36 @@ mod tests {
 
         let recent = store.list_recent_events("alice", "chat-a", 2).unwrap();
         assert_eq!(recent.iter().map(|event| event.content.as_str()).collect::<Vec<_>>(), vec!["message-1", "message-2"]);
+    }
+
+    #[test]
+    fn event_cursor_pages_are_stable_and_owner_scoped() {
+        let mut store = ConversationStore::in_memory(&test_key()).unwrap();
+        let now = Utc::now();
+        for index in 0..5 {
+            store.append_event(
+                "alice",
+                "paged-chat",
+                &event(&format!("event-{index}"), "user", &format!("message-{index}"),
+                    now + chrono::Duration::seconds(index)),
+            ).unwrap();
+        }
+
+        let first = store.list_events_after("alice", "paged-chat", None, 2).unwrap();
+        assert_eq!(first.iter().map(|item| item.event_id.as_str()).collect::<Vec<_>>(),
+            vec!["event-0", "event-1"]);
+        let second = store.list_events_after("alice", "paged-chat",
+            Some(&first.last().unwrap().event_id), 2).unwrap();
+        assert_eq!(second.iter().map(|item| item.event_id.as_str()).collect::<Vec<_>>(),
+            vec!["event-2", "event-3"]);
+        let third = store.list_events_after("alice", "paged-chat",
+            Some(&second.last().unwrap().event_id), 2).unwrap();
+        assert_eq!(third.iter().map(|item| item.event_id.as_str()).collect::<Vec<_>>(),
+            vec!["event-4"]);
+        assert!(store.list_events_after("bob", "paged-chat",
+            Some("event-1"), 2).is_err());
+        assert!(store.list_events_after("alice", "other-chat",
+            Some("event-1"), 2).is_err());
     }
 
     #[test]
