@@ -11,6 +11,7 @@ import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
 import org.json.JSONObject
+import java.security.MessageDigest
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -95,30 +96,24 @@ class MainActivity : AppCompatActivity() {
                 "The selected snapshot is incomplete."
             }
 
-            val transcript = buildString {
-                appendLine("Source: OmniVault user-approved conversation transfer")
-                appendLine("Provider: $provider")
-                appendLine("Conversation reference: $conversationId")
-                appendLine()
-                for (index in 0 until messages.length()) {
-                    val message = messages.optJSONObject(index) ?: continue
-                    val role = message.optString("role", "unknown").take(40)
-                    val text = message.optString("content")
-                    if (text.isNotBlank()) {
-                        append(role.uppercase())
-                        append(": ")
-                        appendLine(text)
-                        appendLine()
-                    }
-                }
+            require(messages.length() in 1..MAX_IMPORTED_MESSAGES) {
+                "The transfer must contain between 1 and $MAX_IMPORTED_MESSAGES messages."
             }
-            require(transcript.isNotBlank() && transcript.toByteArray(Charsets.UTF_8).size <= MAX_TRANSFER_BYTES) {
-                "The conversation transcript is empty or exceeds the 1 MiB runtime limit."
+            val transferJson = snapshot.toString()
+            require(transferJson.toByteArray(Charsets.UTF_8).size <= MAX_TRANSFER_BYTES) {
+                "The selected conversation exceeds the 1 MiB runtime import limit."
             }
+            val sourceKey = "$provider:$conversationId"
+            val digest = MessageDigest.getInstance("SHA-256")
+                .digest(sourceKey.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+                .take(32)
+            val janusConversationId = "omnivault_$digest"
 
             startActivity(Intent(this, AriaImportActivity::class.java).apply {
                 putExtra(AriaImportActivity.EXTRA_TITLE, "OmniVault — $title")
-                putExtra(AriaImportActivity.EXTRA_TEXT, transcript)
+                putExtra(AriaImportActivity.EXTRA_SNAPSHOT, transferJson)
+                putExtra(AriaImportActivity.EXTRA_CONVERSATION_ID, janusConversationId)
             })
         } catch (error: Exception) {
             AlertDialog.Builder(this)
@@ -131,5 +126,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val MAX_TRANSFER_BYTES = 1024 * 1024
+        private const val MAX_IMPORTED_MESSAGES = 1000
     }
 }
