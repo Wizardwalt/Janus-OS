@@ -78,11 +78,12 @@ class JanusRuntimeApi {
   ariaStatus() {
     return this.request('/aria/status');
   }
-  ariaChat(conversationId, message, requestId = null, includePrivateContext = false) {
+  ariaChat(conversationId, message, requestId = null, includePrivateContext = false, signal = undefined) {
     const id = requestId || window.crypto?.randomUUID?.()
       || `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     return this.request('/aria/chat', {
       method: 'POST',
+      signal,
       body: JSON.stringify({
         conversation_id: conversationId,
         message,

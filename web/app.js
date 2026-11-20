@@ -189,15 +189,35 @@ async function deleteCurrentAriaConversation() {
   }
 }
 
+function cancelLiveAriaMessage() {
+  if (activeAriaRequestController) activeAriaRequestController.abort();
+}
+
 async function sendLiveAriaMessage(message, surface) {
+  if (activeAriaRequestController) return;
   const isView = surface === 'view';
+  const controller = new AbortController();
+  activeAriaRequestController = controller;
+  const cancelButtons = [
+    document.getElementById('aria-cancel-btn'),
+    document.getElementById('aria-view-cancel-btn')
+  ].filter(Boolean);
+  cancelButtons.forEach(button => { button.hidden = false; button.disabled = false; });
+  ['aria-send-btn', 'aria-view-send-btn'].forEach(id => {
+    const button = document.getElementById(id);
+    if (button) button.disabled = true;
+  });
   showTyping(
     isView ? 'aria-view-messages' : 'aria-chat-messages',
     isView ? 'aria-view-typing' : 'aria-typing'
   );
   try {
     const response = await window.janusRuntime.ariaChat(
-      activeAriaConversationId, message, null, ariaPrivateContextEnabled(surface)
+      activeAriaConversationId,
+      message,
+      null,
+      ariaPrivateContextEnabled(surface),
+      controller.signal
     );
     removeTyping();
     if (isView) appendAriaViewChat(pm.name || 'ARIA', response.content);
@@ -219,6 +239,13 @@ async function sendLiveAriaMessage(message, surface) {
     setAriaMood('curious');
   } catch (error) {
     removeTyping();
+    if (error.name === 'AbortError') {
+      const cancelled = 'Request cancelled locally. The remote provider may already have received the request.';
+      if (isView) appendAriaViewChat('ARIA SYSTEM', cancelled);
+      else appendAriaChat('ARIA SYSTEM', cancelled);
+      setAriaMood('curious');
+      return;
+    }
     const detail = error.status === 503
       ? 'Live provider or encrypted storage is not configured on the runtime.'
       : error.message;
@@ -239,6 +266,13 @@ async function sendLiveAriaMessage(message, surface) {
     else appendAriaChat('ARIA SYSTEM', message);
     setAriaModeLabel(error.status === 503 ? 'LIVE PROVIDER NOT CONFIGURED' : 'LIVE SERVICE ERROR');
     setAriaMood('sad');
+  } finally {
+    if (activeAriaRequestController === controller) activeAriaRequestController = null;
+    cancelButtons.forEach(button => { button.hidden = true; button.disabled = true; });
+    ['aria-send-btn', 'aria-view-send-btn'].forEach(id => {
+      const button = document.getElementById(id);
+      if (button) button.disabled = false;
+    });
   }
 }
 
@@ -723,6 +757,7 @@ function openAriaChat() {
 }
 
 function closeAriaChat() {
+  cancelLiveAriaMessage();
   document.getElementById('aria-chat-overlay').classList.add('hidden');
 }
 
@@ -952,6 +987,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Quick chat
   document.getElementById('aria-chat-close')?.addEventListener('click', closeAriaChat);
   document.getElementById('aria-send-btn')?.addEventListener('click', sendAriaMessage);
+  document.getElementById('aria-cancel-btn')?.addEventListener('click', cancelLiveAriaMessage);
   document.getElementById('aria-input')?.addEventListener('keydown', e => { if (e.key==='Enter') sendAriaMessage(); });
   document.getElementById('aria-chat-overlay')?.addEventListener('click', e => {
     if (e.target.id === 'aria-chat-overlay') closeAriaChat();
@@ -960,6 +996,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ARIA full view
   document.getElementById('aria-view-back')?.addEventListener('click', closeAriaView);
   document.getElementById('aria-view-send-btn')?.addEventListener('click', sendAriaViewMessage);
+  document.getElementById('aria-view-cancel-btn')?.addEventListener('click', cancelLiveAriaMessage);
   document.getElementById('aria-view-input')?.addEventListener('keydown', e => { if (e.key==='Enter') sendAriaViewMessage(); });
 
   // Projection
