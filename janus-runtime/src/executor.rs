@@ -204,4 +204,14 @@ mod tests {
         assert!(validate_plugin_capabilities(&["shell".to_string()]).is_err());
         assert!(validate_plugin_capabilities(&["filesystem:read".to_string()]).is_err());
     }
+    #[test]
+    fn cancellation_guard_signals_worker_when_request_is_dropped() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        {
+            let _guard = PluginCancellationGuard(Arc::clone(&cancelled));
+            assert!(!cancelled.load(Ordering::Acquire));
+        }
+        assert!(cancelled.load(Ordering::Acquire));
+    }
+
 }
