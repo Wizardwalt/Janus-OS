@@ -6,6 +6,8 @@ use std::{
     io::{Read, Write},
     sync::{Arc, Mutex},
     time::Duration,
+    path::Path,
+    fs,
 };
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -25,6 +27,64 @@ pub trait HardwareInterface: Send + Sync {
 
     /// Check if interface is available
     fn available(&self) -> bool;
+}
+
+/// Read-only USB inventory entry. Device serial numbers are deliberately excluded.
+#[derive(Debug, Clone, Serialize)]
+pub struct UsbDeviceDescriptor {
+    pub sysfs_name: String,
+    pub bus_number: Option<u16>,
+    pub device_number: Option<u16>,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+}
+
+fn read_usb_attribute(directory: &Path, name: &str) -> Option<String> {
+    fs::read_to_string(directory.join(name))
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_usb_hex(directory: &Path, name: &str) -> Option<u16> {
+    u16::from_str_radix(read_usb_attribute(directory, name)?.trim_start_matches("0x"), 16).ok()
+}
+
+fn discover_usb_devices_at(root: &Path) -> Result<Vec<UsbDeviceDescriptor>> {
+    let mut devices = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let directory = entry.path();
+        if !directory.is_dir() {
+            continue;
+        }
+        let (Some(vendor_id), Some(product_id)) = (
+            parse_usb_hex(&directory, "idVendor"),
+            parse_usb_hex(&directory, "idProduct"),
+        ) else {
+            continue;
+        };
+        devices.push(UsbDeviceDescriptor {
+            sysfs_name: entry.file_name().to_string_lossy().into_owned(),
+            bus_number: read_usb_attribute(&directory, "busnum")
+                .and_then(|value| value.parse().ok()),
+            device_number: read_usb_attribute(&directory, "devnum")
+                .and_then(|value| value.parse().ok()),
+            vendor_id,
+            product_id,
+            manufacturer: read_usb_attribute(&directory, "manufacturer"),
+            product: read_usb_attribute(&directory, "product"),
+        });
+    }
+    devices.sort_by(|left, right| {
+        left.bus_number
+            .cmp(&right.bus_number)
+            .then_with(|| left.device_number.cmp(&right.device_number))
+            .then_with(|| left.sysfs_name.cmp(&right.sysfs_name))
+    });
+    Ok(devices)
 }
 
 /// Read-only inventory entry for a serial device; serial numbers are intentionally omitted.
@@ -309,6 +369,15 @@ impl HardwareManager {
         }
     }
 
+    /// Enumerate USB devices from Linux sysfs without opening or probing them.
+    pub async fn discover_usb_devices(&self) -> Result<Vec<UsbDeviceDescriptor>> {
+        if !self.enabled {
+            anyhow::bail!("hardware integration is disabled by configuration");
+        }
+        tokio::task::spawn_blocking(|| discover_usb_devices_at(Path::new("/sys/bus/usb/devices")))
+            .await?
+    }
+
     /// Enumerate serial endpoints without opening, probing, or transmitting to devices.
     pub async fn discover_serial_ports(&self) -> Result<Vec<DiscoveredSerialPort>> {
         if !self.enabled {
@@ -460,5 +529,42 @@ mod hardware_configuration_tests {
         let status = manager.status().await;
         assert_eq!(status.len(), 5);
         assert!(status.iter().all(|adapter| adapter.state == "disabled"));
+    }
+}
+
+
+#[cfg(test)]
+mod usb_inventory_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn usb_inventory_is_read_only_sorted_and_omits_serial_numbers() {
+        let root = std::env::temp_dir().join(format!("janus-usb-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        for (name, vendor, product, bus, device) in [
+            ("2-1", "1234", "0002", "2", "7"),
+            ("1-3", "abcd", "0042", "1", "3"),
+        ] {
+            let directory = root.join(name);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("idVendor"), vendor).unwrap();
+            fs::write(directory.join("idProduct"), product).unwrap();
+            fs::write(directory.join("busnum"), bus).unwrap();
+            fs::write(directory.join("devnum"), device).unwrap();
+            fs::write(directory.join("manufacturer"), "Example Maker").unwrap();
+            fs::write(directory.join("product"), "Example Device").unwrap();
+            fs::write(directory.join("serial"), "must-not-be-exposed").unwrap();
+        }
+
+        let devices = discover_usb_devices_at(&root).unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].sysfs_name, "1-3");
+        assert_eq!(devices[0].vendor_id, 0xabcd);
+        assert_eq!(devices[0].product_id, 0x0042);
+        assert_eq!(devices[1].sysfs_name, "2-1");
+        let serialized = serde_json::to_string(&devices).unwrap();
+        assert!(!serialized.contains("must-not-be-exposed"));
+        fs::remove_dir_all(root).unwrap();
     }
 }

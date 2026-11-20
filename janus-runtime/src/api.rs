@@ -3,7 +3,7 @@
 use crate::{
     aria_provider::{provider_from_environment, AriaChatProvider, AriaProviderMessage},
     executor::{PluginExecutor, PluginSummary},
-    hardware::{DiscoveredSerialPort, HardwareAdapterStatus, HardwareManager},
+    hardware::{DiscoveredSerialPort, HardwareAdapterStatus, HardwareManager, UsbDeviceDescriptor},
     state::StateManager,
 };
 use anyhow::{Context, Result};
@@ -409,6 +409,7 @@ impl ApiServer {
             .route("/health", get(health))
             .route("/hardware/status", get(hardware_status))
             .route("/hardware/serial/ports", get(hardware_serial_ports))
+            .route("/hardware/usb/devices", get(hardware_usb_devices))
             .route("/auth/bootstrap", post(bootstrap))
             .route("/auth/login", post(login))
             .route("/auth/me", get(current_user))
@@ -1351,6 +1352,29 @@ async fn hardware_status(
             error: None,
         }),
     )
+}
+
+async fn hardware_usb_devices(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<Vec<UsbDeviceDescriptor>>>) {
+    if let Err(error) = authenticated_account(&state.state_manager, &headers).await {
+        return unauthorized_response(error);
+    }
+    match state.hardware.discover_usb_devices().await {
+        Ok(devices) => (
+            StatusCode::OK,
+            Json(ApiResponse { status: "success".into(), data: Some(devices), error: None }),
+        ),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse {
+                status: "error".into(),
+                data: None,
+                error: Some(format!("USB inventory unavailable: {error}")),
+            }),
+        ),
+    }
 }
 
 async fn hardware_serial_ports(
