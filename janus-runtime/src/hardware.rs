@@ -87,6 +87,40 @@ fn discover_usb_devices_at(root: &Path) -> Result<Vec<UsbDeviceDescriptor>> {
     Ok(devices)
 }
 
+/// Read-only Linux memory statistics from /proc/meminfo.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryInventory {
+    pub total_bytes: Option<u64>,
+    pub available_bytes: Option<u64>,
+    pub free_bytes: Option<u64>,
+    pub swap_total_bytes: Option<u64>,
+    pub swap_free_bytes: Option<u64>,
+}
+
+fn parse_memory_inventory(contents: &str) -> MemoryInventory {
+    let mut values = std::collections::HashMap::new();
+    for line in contents.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let Some(kilobytes) = value
+            .split_whitespace()
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        values.insert(key, kilobytes.saturating_mul(1024));
+    }
+    MemoryInventory {
+        total_bytes: values.get("MemTotal").copied(),
+        available_bytes: values.get("MemAvailable").copied(),
+        free_bytes: values.get("MemFree").copied(),
+        swap_total_bytes: values.get("SwapTotal").copied(),
+        swap_free_bytes: values.get("SwapFree").copied(),
+    }
+}
+
 /// Read-only Linux thermal sensor sample. No device controls are exposed.
 #[derive(Debug, Clone, Serialize)]
 pub struct ThermalSensorReading {
@@ -430,6 +464,18 @@ impl HardwareManager {
             .await?
     }
 
+    /// Read memory capacity/availability without changing system state.
+    pub async fn memory_inventory(&self) -> Result<MemoryInventory> {
+        if !self.enabled {
+            anyhow::bail!("hardware integration is disabled by configuration");
+        }
+        tokio::task::spawn_blocking(|| {
+            let contents = fs::read_to_string("/proc/meminfo")?;
+            Ok(parse_memory_inventory(&contents))
+        })
+        .await?
+    }
+
     /// Read Linux thermal-zone metadata and temperatures without changing device state.
     pub async fn discover_thermal_sensors(&self) -> Result<Vec<ThermalSensorReading>> {
         if !self.enabled {
@@ -595,6 +641,27 @@ mod hardware_configuration_tests {
     }
 }
 
+
+#[cfg(test)]
+mod memory_inventory_tests {
+    use super::*;
+
+    #[test]
+    fn memory_inventory_parses_kernel_kilobytes_without_inventing_missing_values() {
+        let sample = "MemTotal:       16384000 kB\nMemFree:         1024000 kB\nMemAvailable:    4096000 kB\nSwapTotal:       2048000 kB\nSwapFree:         512000 kB\n";
+        let result = parse_memory_inventory(sample);
+        assert_eq!(result.total_bytes, Some(16_777_216_000));
+        assert_eq!(result.available_bytes, Some(4_194_304_000));
+        assert_eq!(result.free_bytes, Some(1_048_576_000));
+        assert_eq!(result.swap_total_bytes, Some(2_097_152_000));
+        assert_eq!(result.swap_free_bytes, Some(524_288_000));
+
+        let partial = parse_memory_inventory("MemTotal: 10 kB\n");
+        assert_eq!(partial.total_bytes, Some(10_240));
+        assert_eq!(partial.available_bytes, None);
+        assert_eq!(partial.swap_total_bytes, None);
+    }
+}
 
 #[cfg(test)]
 mod thermal_inventory_tests {
