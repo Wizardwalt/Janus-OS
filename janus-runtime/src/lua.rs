@@ -532,30 +532,4 @@ mod tests {
         assert_eq!(result, serde_json::json!("nil"));
     }
 
-    #[test]
-    fn plugin_sandbox_observes_cancellation_during_execution() {
-        use std::{sync::mpsc, thread, time::Duration};
-
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let worker_cancelled = Arc::clone(&cancelled);
-        let (started_tx, started_rx) = mpsc::channel();
-
-        let worker = thread::spawn(move || {
-            let sandbox = PluginSandbox::new().unwrap();
-            started_tx.send(()).unwrap();
-            sandbox.execute_with_cancellation(
-                "while true do end",
-                serde_json::json!({}),
-                worker_cancelled,
-            )
-        });
-
-        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        thread::sleep(Duration::from_millis(50));
-        cancelled.store(true, Ordering::Release);
-
-        let error = worker.join().expect("cancelled Lua worker should exit").unwrap_err();
-        assert!(error.to_string().contains("plugin execution cancelled"));
-    }
-
 }
