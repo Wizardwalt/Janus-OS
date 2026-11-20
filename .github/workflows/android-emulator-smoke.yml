@@ -13,6 +13,10 @@ permissions:
 jobs:
   emulator-smoke:
     runs-on: ubuntu-latest
+    # Hosted GitHub runners may lack KVM. Android Emulator 37 requires this
+    # explicit opt-in when the runner action falls back to TCG software CPU.
+    env:
+      ANDROID_I_WANT_MY_TCG: "yes"
     timeout-minutes: 35
     steps:
       - name: Check out source
