@@ -129,7 +129,7 @@ class HomeActivity : AppCompatActivity() {
                 "Unsupported OmniVault transfer format."
             }
             val conversationId = snapshot.optString("id")
-            val title = snapshot.optString("title").take(300)
+            val title = snapshot.optString("title").take(100)
             val provider = snapshot.optString("provider").take(80)
             val messages = snapshot.optJSONArray("messages")
                 ?: error("The selected snapshot has no messages.")
