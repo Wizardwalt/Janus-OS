@@ -58,12 +58,12 @@ function updateAriaHistoryControls() {
   const selector = document.getElementById('aria-history-select');
   const newButton = document.getElementById('aria-new-chat-btn');
   const deleteButton = document.getElementById('aria-delete-chat-btn');
+  const exportButton = document.getElementById('aria-export-chat-btn');
   if (selector) selector.disabled = !authenticated;
   if (newButton) newButton.disabled = !authenticated;
-  if (deleteButton) {
-    const selected = selector?.selectedOptions?.[0];
-    deleteButton.disabled = !authenticated || selected?.dataset.saved !== 'true';
-  }
+  const selected = selector?.selectedOptions?.[0];
+  if (deleteButton) deleteButton.disabled = !authenticated || selected?.dataset.saved !== 'true';
+  if (exportButton) exportButton.disabled = !authenticated || selected?.dataset.saved !== 'true';
 }
 
 function populateAriaHistorySelector(conversations) {
@@ -148,6 +148,31 @@ function startNewAriaConversation() {
   }
   appendAriaHistory([]);
   updateAriaHistoryControls();
+}
+
+async function exportCurrentAriaConversation() {
+  if (!window.janusRuntime?.hasSession()) return;
+  const selector = document.getElementById('aria-history-select');
+  const selected = selector?.selectedOptions?.[0];
+  if (selected?.dataset.saved !== 'true') return;
+  const button = document.getElementById('aria-export-chat-btn');
+  if (button) button.disabled = true;
+  try {
+    const archive = await window.janusRuntime.ariaConversationExport(activeAriaConversationId);
+    const blob = new Blob([JSON.stringify(archive, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `aria-conversation-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    appendAriaChat('ARIA SYSTEM', `Could not export that conversation: ${error.message}`);
+  } finally {
+    updateAriaHistoryControls();
+  }
 }
 
 async function deleteCurrentAriaConversation() {
@@ -958,6 +983,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('aria-new-chat-btn')?.addEventListener('click', startNewAriaConversation);
   document.getElementById('aria-delete-chat-btn')?.addEventListener('click', deleteCurrentAriaConversation);
+  document.getElementById('aria-export-chat-btn')?.addEventListener('click', exportCurrentAriaConversation);
 
   // Restore the latest authenticated conversation when a runtime session exists.
   if (window.janusRuntime?.hasSession()) loadAriaHistory();
