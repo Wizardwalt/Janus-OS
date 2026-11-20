@@ -3,7 +3,7 @@
 use crate::{
     aria_provider::{AriaChatProvider, AriaModelProvider, AriaProviderMessage},
     executor::{PluginExecutor, PluginSummary},
-    hardware::{HardwareAdapterStatus, HardwareManager},
+    hardware::{DiscoveredSerialPort, HardwareAdapterStatus, HardwareManager},
     state::StateManager,
 };
 use anyhow::{Context, Result};
@@ -408,6 +408,7 @@ impl ApiServer {
             .route("/aria/learning/persist", post(aria_persist_pending))
             .route("/health", get(health))
             .route("/hardware/status", get(hardware_status))
+            .route("/hardware/serial/ports", get(hardware_serial_ports))
             .route("/auth/bootstrap", post(bootstrap))
             .route("/auth/login", post(login))
             .route("/auth/me", get(current_user))
@@ -1324,6 +1325,29 @@ async fn hardware_status(
             error: None,
         }),
     )
+}
+
+async fn hardware_serial_ports(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<Vec<DiscoveredSerialPort>>>) {
+    if let Err(error) = authenticated_account(&state.state_manager, &headers).await {
+        return unauthorized_response(error);
+    }
+    match state.hardware.discover_serial_ports().await {
+        Ok(ports) => (
+            StatusCode::OK,
+            Json(ApiResponse { status: "success".into(), data: Some(ports), error: None }),
+        ),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse {
+                status: "error".into(),
+                data: None,
+                error: Some(format!("serial device discovery unavailable: {error}")),
+            }),
+        ),
+    }
 }
 
 async fn health(AxumState(state): AxumState<ApiState>) -> Json<HealthResponse> {
