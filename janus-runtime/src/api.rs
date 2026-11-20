@@ -2240,3 +2240,85 @@ async fn get_audit_logs(
         ),
     }
 }
+
+
+#[cfg(test)]
+mod aria_context_tests {
+    use super::*;
+    use chrono::Utc;
+    use janus_core::aria::{
+        EpistemicStatus, Hat, KnowledgeContentType, KnowledgeRecord, KnowledgeSource,
+    };
+
+    #[test]
+    fn knowledge_context_retains_record_id_status_and_source_uri() {
+        let now = Utc::now();
+        let record = KnowledgeRecord {
+            id: "knowledge-42".into(),
+            schema_version: "1.0.0".into(),
+            title: "Serial device reference".into(),
+            content: "A documented serial interface.".into(),
+            content_type: KnowledgeContentType::Reference,
+            hat_ids: vec![Hat::White],
+            tags: vec![],
+            epistemic_status: EpistemicStatus::Unverified,
+            confidence: None,
+            confidence_method: None,
+            sources: vec![KnowledgeSource {
+                source_type: janus_core::aria::KnowledgeSourceType::OfficialDocumentation,
+                title: Some("Vendor manual".into()),
+                publisher: None,
+                uri: Some("https://example.invalid/manual".into()),
+                artifact_id: None,
+                sha256: None,
+                retrieved_at: now,
+                quoted_locator: None,
+                notes: None,
+            }],
+            created_at: now,
+            updated_at: now,
+            version: 1,
+            supersedes: vec![],
+            handling: "private".into(),
+            project_ids: vec![],
+            review_notes: None,
+            expires_at: None,
+        };
+        let rendered = format_aria_context_hit(UnifiedSearchHit::Knowledge(record));
+        assert!(rendered.contains("knowledge-42"));
+        assert!(rendered.contains("Unverified"));
+        assert!(rendered.contains("https://example.invalid/manual"));
+    }
+
+    #[test]
+    fn source_passages_and_personal_memories_keep_their_source_identifiers() {
+        let passage = janus_core::aria::SourcePassage {
+            artifact_id: "artifact-7".into(),
+            title: "Imported repair notes".into(),
+            sha256: "a".repeat(64),
+            start_byte: 0,
+            end_byte: 10,
+            ordinal: 3,
+            text: "Check the connector.".into(),
+        };
+        let source = format_aria_context_hit(UnifiedSearchHit::Source(passage));
+        assert!(source.contains("artifact-7"));
+        assert!(source.contains("chunk=3"));
+        assert!(source.contains(&"a".repeat(64)));
+
+        let now = Utc::now();
+        let memory = PersonalMemory {
+            memory_id: "memory-9".into(),
+            owner_id: "owner-1".into(),
+            content: "Prefers local-first storage.".into(),
+            source_refs: vec!["conversation:privacy".into()],
+            created_at: now,
+            updated_at: now,
+            expires_at: None,
+            version: 1,
+        };
+        let rendered = format_aria_context_hit(UnifiedSearchHit::Personal(memory));
+        assert!(rendered.contains("memory-9"));
+        assert!(rendered.contains("conversation:privacy"));
+    }
+}
