@@ -1,6 +1,6 @@
 # Aria Provider and Memory Delivery Gates
 
-**Status:** Implementation contract. This document records required behavior and verification; it does not claim that live provider chat, user-scoped conversation persistence, or complete semantic retrieval is already connected.
+**Status:** Implementation contract. Authenticated provider-backed chat and encrypted user-scoped conversation storage are connected. This document records the remaining behavior and verification gates; it does not claim streaming, complete provider coverage, export/retention, or operational key recovery are finished.
 
 ## Non-negotiable boundaries
 
@@ -17,9 +17,9 @@
 ### Gate 1 — Live provider adapter
 Required work:
 - Define a provider-neutral server-side request/response contract.
-- Implement at least one configurable OpenAI-compatible endpoint and one local-model endpoint using the same contract.
+- Keep the provider-neutral contract and support the existing OpenAI-compatible protocol plus the native Anthropic Messages protocol. Local model servers may use the OpenAI-compatible adapter when they implement that protocol.
 - Keep secrets in protected runtime configuration, with redacted logs and owner-controlled rotation.
-- Add timeout, cancellation, rate/size limits, provider health state, and deterministic offline fallback.
+- Preserve bounded request/response sizes, timeouts, cancellation, provider health state, and deterministic offline fallback; add API-level failure-injection tests and streaming.
 
 Acceptance:
 - A configured provider answers through the Aria UI.
@@ -29,7 +29,7 @@ Acceptance:
 
 ### Gate 2 — Durable, private conversation history
 Required work:
-- Persist conversation events under an authenticated user identity.
+- Persist conversation events under an authenticated user identity; owner-scoped list/read/append/delete and cursor pagination are implemented.
 - Enforce ownership in every read, append, edit, export, and delete path.
 - Add migrations, retention configuration, export, deletion, and audit coverage.
 - Keep conversation history separate from extracted long-term memory.
@@ -43,7 +43,7 @@ Acceptance:
 ### Gate 3 — Evidence-linked memory retrieval
 Required work:
 - Retrieve only records authorized for the current user and task.
-- Return source/event identifiers, timestamps, and confidence/provenance metadata.
+- Preserve knowledge IDs, epistemic status, source URIs, source artifact IDs/chunk ordinals/hashes, and personal-memory IDs/source references in model context.
 - Support correction, review, and explicit deletion of remembered facts.
 - Keep retrieval read-only with respect to executable code, capabilities, and security policy.
 

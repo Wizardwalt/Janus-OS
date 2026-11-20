@@ -50,7 +50,7 @@ Implemented in this repository:
 
 ### Stage 1 boundaries
 
-Stage 1 is the foundation, not a claim that every future capability already exists. Aria does not yet have a connected live model provider, autonomous learning pipeline, document-ingestion service, semantic/vector retrieval, voice interface, or production tool gateway. The host application must authenticate users and authorize any broader access scope; the knowledge store enforces a scope but is not an identity provider.
+Stage 1 is the foundation, not a claim that every future capability already exists. Aria now has an authenticated provider-backed chat path with OpenAI-compatible and native Anthropic adapters, plus encrypted owner-scoped conversation storage and cursor pagination. Streaming, additional provider protocols, autonomous learning, voice, and a production tool gateway remain incomplete. A provider adapter does not mean credentials have been configured or a live provider has been acceptance-tested on the user's device. The host application must authenticate users and authorize any broader access scope; the knowledge store enforces a scope but is not an identity provider.
 
 ## Stage 2 — Memory and learning (in progress)
 
