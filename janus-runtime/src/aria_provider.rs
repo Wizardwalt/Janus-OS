@@ -498,6 +498,86 @@ mod tests {
         assert_eq!(completion.model, "test-model-returned");
     }
     #[tokio::test]
+    async fn rejects_provider_http_errors_without_exposing_response_bodies() {
+        async fn unavailable() -> axum::http::StatusCode {
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        }
+        let app = Router::new().route("/v1/chat/completions", post(unavailable));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let provider = AriaModelProvider::new(
+            format!("http://{address}/v1/chat/completions"),
+            "local-test".into(), "test-model".into(), None,
+        ).unwrap();
+        let error = provider.complete(&[
+            AriaProviderMessage { role: "user".into(), content: "Hello".into() },
+        ]).await.unwrap_err();
+        assert!(error.to_string().contains("HTTP 503"));
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_and_oversized_provider_completions() {
+        async fn empty() -> Json<Value> {
+            Json(json!({"model":"test-model","choices":[{"message":{"content":"  "}}]}))
+        }
+        let app = Router::new().route("/v1/chat/completions", post(empty));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let provider = AriaModelProvider::new(
+            format!("http://{address}/v1/chat/completions"),
+            "local-test".into(), "test-model".into(), None,
+        ).unwrap();
+        let error = provider.complete(&[
+            AriaProviderMessage { role: "user".into(), content: "Hello".into() },
+        ]).await.unwrap_err();
+        assert!(error.to_string().contains("empty assistant message"));
+
+        async fn oversized() -> axum::response::Response {
+            axum::response::Response::builder()
+                .status(axum::http::StatusCode::OK)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(vec![
+                    b'x';
+                    MAX_PROVIDER_RESPONSE_BYTES + 1
+                ]))
+                .unwrap()
+        }
+        let app = Router::new().route("/v1/chat/completions", post(oversized));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let provider = AriaModelProvider::new(
+            format!("http://{address}/v1/chat/completions"),
+            "local-test".into(), "test-model".into(), None,
+        ).unwrap();
+        let error = provider.complete(&[
+            AriaProviderMessage { role: "user".into(), content: "Hello".into() },
+        ]).await.unwrap_err();
+        assert!(error.to_string().contains("2 MiB limit"));
+    }
+
+    #[tokio::test]
+    async fn anthropic_adapter_rejects_non_success_provider_status() {
+        async fn unavailable() -> axum::http::StatusCode {
+            axum::http::StatusCode::TOO_MANY_REQUESTS
+        }
+        let app = Router::new().route("/v1/messages", post(unavailable));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let provider = AriaAnthropicProvider::new(
+            format!("http://{address}/v1/messages"),
+            "claude-test".into(), "test-key".into(),
+        ).unwrap();
+        let error = provider.complete(&[
+            AriaProviderMessage { role: "user".into(), content: "Hello".into() },
+        ]).await.unwrap_err();
+        assert!(error.to_string().contains("HTTP 429"));
+    }
+
+    #[tokio::test]
     async fn anthropic_adapter_sends_native_messages_and_parses_text_blocks() {
         async fn complete(
             headers: axum::http::HeaderMap,
