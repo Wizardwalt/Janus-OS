@@ -103,9 +103,10 @@ class MainActivity : AppCompatActivity() {
             require(transferJson.toByteArray(Charsets.UTF_8).size <= MAX_TRANSFER_BYTES) {
                 "The selected conversation exceeds the 1 MiB runtime import limit."
             }
-            val sourceKey = "$provider:$conversationId"
+            // Hash the entire normalized snapshot, not just provider/id: fallback
+            // IDs such as "import-1" can legitimately repeat across source archives.
             val digest = MessageDigest.getInstance("SHA-256")
-                .digest(sourceKey.toByteArray(Charsets.UTF_8))
+                .digest(transferJson.toByteArray(Charsets.UTF_8))
                 .joinToString("") { "%02x".format(it) }
                 .take(32)
             val janusConversationId = "omnivault_$digest"
