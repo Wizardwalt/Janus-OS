@@ -100,6 +100,9 @@ class JanusRuntimeApi {
   ariaDeleteConversation(conversationId) {
     return this.request(`/aria/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
   }
+  ariaConversationExport(conversationId) {
+    return this.request(`/aria/conversations/${encodeURIComponent(conversationId)}/export`);
+  }
   ariaRemember(content, sourceRefs = [], expiresAt = null) {
     return this.request('/aria/memory', {
       method: 'POST',

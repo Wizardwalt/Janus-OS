@@ -147,6 +147,16 @@ struct AriaProviderStatus {
 }
 
 #[derive(Serialize)]
+struct AriaConversationExport {
+    format: &'static str,
+    conversation_id: String,
+    event_count: usize,
+    events: Vec<ConversationEvent>,
+}
+
+const MAX_ARIA_CONVERSATION_EXPORT_EVENTS: usize = 10_000;
+
+#[derive(Serialize)]
 struct AriaChatResponse {
     conversation_id: String,
     user_event_id: String,
@@ -397,6 +407,10 @@ impl ApiServer {
             .route(
                 "/aria/conversations/:conversation_id/events",
                 get(aria_conversation_events).post(aria_conversation_append),
+            )
+            .route(
+                "/aria/conversations/:conversation_id/export",
+                get(aria_conversation_export),
             )
             .route("/aria/conversations/:conversation_id", delete(aria_conversation_delete))
             .route("/aria/memory", get(aria_memory_list).post(aria_memory_remember))
@@ -877,6 +891,81 @@ async fn aria_conversation_events(
             status: "error".into(), data: None, error: Some(error.to_string()),
         })),
     }
+}
+
+/// Export one complete owner-scoped conversation as a versioned JSON payload.
+/// The endpoint refuses oversized histories rather than silently returning a partial export.
+async fn aria_conversation_export(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+) -> (StatusCode, Json<ApiResponse<AriaConversationExport>>) {
+    let account = match authenticated_account(&state.state_manager, &headers).await {
+        Ok(account) => account,
+        Err(error) => return unauthorized_response(error),
+    };
+    let stores = match state.aria.lock() {
+        Ok(stores) => stores,
+        Err(_) => return aria_store_lock_unavailable(),
+    };
+    let Some(store) = stores.conversations.as_ref() else {
+        return aria_conversation_store_unavailable();
+    };
+    let count = match store.count_events(&account.id, &conversation_id) {
+        Ok(count) => count,
+        Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            status: "error".into(), data: None, error: Some(error.to_string()),
+        })),
+    };
+    if count == 0 {
+        return (StatusCode::NOT_FOUND, Json(ApiResponse {
+            status: "error".into(), data: None,
+            error: Some("conversation not found".into()),
+        }));
+    }
+    if count > MAX_ARIA_CONVERSATION_EXPORT_EVENTS {
+        return (StatusCode::PAYLOAD_TOO_LARGE, Json(ApiResponse {
+            status: "error".into(), data: None,
+            error: Some("conversation exceeds the 10,000-event export limit; use paginated event retrieval".into()),
+        }));
+    }
+
+    let mut events = Vec::with_capacity(count);
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = match store.list_events_after(
+            &account.id,
+            &conversation_id,
+            cursor.as_deref(),
+            1_000,
+        ) {
+            Ok(page) => page,
+            Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse {
+                status: "error".into(), data: None, error: Some(error.to_string()),
+            })),
+        };
+        if page.is_empty() {
+            break;
+        }
+        cursor = page.last().map(|event| event.event_id.clone());
+        events.extend(page);
+    }
+    if events.len() != count {
+        return (StatusCode::CONFLICT, Json(ApiResponse {
+            status: "error".into(), data: None,
+            error: Some("conversation changed while its export was being assembled; retry the export".into()),
+        }));
+    }
+    (StatusCode::OK, Json(ApiResponse {
+        status: "success".into(),
+        data: Some(AriaConversationExport {
+            format: "janus.aria.conversation.v1",
+            conversation_id,
+            event_count: events.len(),
+            events,
+        }),
+        error: None,
+    }))
 }
 
 async fn aria_conversation_append(

@@ -314,6 +314,19 @@ impl ConversationStore {
         Ok(events)
     }
 
+    /// Count events for one owner and conversation without exposing content.
+    pub fn count_events(&self, owner_id: &str, conversation_id: &str) -> Result<usize> {
+        validate_identifier(owner_id, MAX_OWNER_ID_BYTES, "owner_id")?;
+        validate_identifier(conversation_id, MAX_CONVERSATION_ID_BYTES, "conversation_id")?;
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM aria_conversation_events
+             WHERE owner_id = ?1 AND conversation_id = ?2",
+            params![owner_id, conversation_id],
+            |row| row.get(0),
+        )?;
+        usize::try_from(count).context("Aria conversation event count is out of range")
+    }
+
     /// Delete a conversation only within the supplied owner namespace.
     pub fn delete_conversation(&mut self, owner_id: &str, conversation_id: &str) -> Result<bool> {
         validate_identifier(owner_id, MAX_OWNER_ID_BYTES, "owner_id")?;
@@ -652,6 +665,21 @@ mod tests {
 
         drop(store);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn event_counts_are_owner_and_conversation_scoped() {
+        let mut store = ConversationStore::in_memory(&test_key()).unwrap();
+        let now = Utc::now();
+        store.append_event("alice", "chat-a", &event("a1", "user", "one", now)).unwrap();
+        store.append_event("alice", "chat-a", &event("a2", "assistant", "two", now + Duration::seconds(1))).unwrap();
+        store.append_event("alice", "chat-b", &event("b1", "user", "three", now)).unwrap();
+        store.append_event("bob", "chat-a", &event("c1", "user", "four", now)).unwrap();
+
+        assert_eq!(store.count_events("alice", "chat-a").unwrap(), 2);
+        assert_eq!(store.count_events("alice", "chat-b").unwrap(), 1);
+        assert_eq!(store.count_events("bob", "chat-a").unwrap(), 1);
+        assert_eq!(store.count_events("mallory", "chat-a").unwrap(), 0);
     }
 
     #[test]
