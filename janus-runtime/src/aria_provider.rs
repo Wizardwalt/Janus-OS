@@ -6,7 +6,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use reqwest::{redirect::Policy, Client, Url};
 use serde::{Deserialize, Serialize};
-use std::{future::Future, path::Path, pin::Pin, time::Duration};
+use std::{future::Future, path::Path, pin::Pin, sync::Arc, time::Duration};
 
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ASSISTANT_MESSAGE_BYTES: usize = 64 * 1024;
@@ -193,6 +193,162 @@ impl AriaModelProvider {
             provider: self.provider_name.clone(),
             model,
         })
+    }
+}
+
+
+/// Native Anthropic Messages API adapter. Credentials remain server-side.
+#[derive(Clone)]
+pub struct AriaAnthropicProvider {
+    endpoint: Url,
+    model: String,
+    api_key: String,
+    client: Client,
+}
+
+#[derive(Serialize)]
+struct AnthropicRequest<'a> {
+    model: &'a str,
+    max_tokens: u16,
+    messages: Vec<AnthropicInputMessage<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AnthropicInputMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    model: Option<String>,
+    content: Vec<AnthropicContentBlock>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicContentBlock {
+    #[serde(rename = "type")]
+    kind: String,
+    text: Option<String>,
+}
+
+impl AriaAnthropicProvider {
+    pub fn from_environment() -> Result<Option<Self>> {
+        let model = std::env::var("JANUS_ARIA_ANTHROPIC_MODEL").ok();
+        let key_path = std::env::var_os("JANUS_ARIA_ANTHROPIC_API_KEY_FILE");
+        match (model, key_path) {
+            (None, None) => Ok(None),
+            (Some(model), Some(path)) => {
+                let endpoint = std::env::var("JANUS_ARIA_ANTHROPIC_MESSAGES_URL")
+                    .unwrap_or_else(|_| "https://api.anthropic.com/v1/messages".to_string());
+                let api_key = read_private_api_key(Path::new(&path))?;
+                Self::new(endpoint, model, api_key).map(Some)
+            }
+            _ => bail!("JANUS_ARIA_ANTHROPIC_MODEL and JANUS_ARIA_ANTHROPIC_API_KEY_FILE must be configured together"),
+        }
+    }
+
+    fn new(endpoint: impl AsRef<str>, model: String, api_key: String) -> Result<Self> {
+        ensure!(!model.trim().is_empty() && model.len() <= 128,
+            "Anthropic model must contain 1..=128 bytes");
+        ensure!(!api_key.trim().is_empty() && api_key.len() <= 4096,
+            "Anthropic API key must contain 1..=4096 bytes");
+        let endpoint = Url::parse(endpoint.as_ref()).context("parsing Anthropic endpoint")?;
+        validate_endpoint(&endpoint)?;
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
+            .redirect(Policy::none())
+            .build()
+            .context("building Anthropic HTTP client")?;
+        Ok(Self { endpoint, model, api_key, client })
+    }
+
+    async fn complete(&self, messages: &[AriaProviderMessage]) -> Result<AriaProviderCompletion> {
+        ensure!(!messages.is_empty() && messages.len() <= 32,
+            "Aria provider request must contain 1..=32 messages");
+        let mut system_parts = Vec::new();
+        let mut input = Vec::new();
+        for message in messages {
+            match message.role.as_str() {
+                "system" => system_parts.push(message.content.as_str()),
+                "user" | "assistant" => input.push(AnthropicInputMessage {
+                    role: &message.role,
+                    content: &message.content,
+                }),
+                _ => bail!("Anthropic chat supports only system, user, and assistant roles"),
+            }
+        }
+        ensure!(!input.is_empty(), "Anthropic request must contain a user or assistant message");
+        let request = AnthropicRequest {
+            model: &self.model,
+            max_tokens: 2048,
+            messages: input,
+            system: if system_parts.is_empty() { None } else {
+                Some(system_parts.join("\n\n"))
+            },
+        };
+        let body = serde_json::to_vec(&request).context("encoding Anthropic request")?;
+        let mut response = self.client.post(self.endpoint.clone())
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .body(body)
+            .send().await.context("sending Anthropic request")?;
+        let status = response.status();
+        ensure!(status.is_success(), "Anthropic provider returned HTTP {status}");
+        if response.content_length().is_some_and(|length| length > MAX_PROVIDER_RESPONSE_BYTES as u64) {
+            bail!("Anthropic response exceeds the 2 MiB limit");
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.context("reading Anthropic response")? {
+            ensure!(bytes.len().saturating_add(chunk.len()) <= MAX_PROVIDER_RESPONSE_BYTES,
+                "Anthropic response exceeds the 2 MiB limit");
+            bytes.extend_from_slice(&chunk);
+        }
+        let decoded: AnthropicResponse = serde_json::from_slice(&bytes)
+            .context("decoding Anthropic response")?;
+        let content = decoded.content.into_iter()
+            .filter(|block| block.kind == "text")
+            .filter_map(|block| block.text)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string();
+        ensure!(!content.is_empty(), "Anthropic returned no text content");
+        ensure!(content.len() <= MAX_ASSISTANT_MESSAGE_BYTES,
+            "Aria assistant response exceeds the 64 KiB storage limit");
+        let model = decoded.model
+            .filter(|value| !value.trim().is_empty() && value.len() <= 128)
+            .unwrap_or_else(|| self.model.clone());
+        Ok(AriaProviderCompletion {
+            content,
+            provider: "anthropic".into(),
+            model,
+        })
+    }
+}
+
+impl AriaChatProvider for AriaAnthropicProvider {
+    fn provider_name(&self) -> &str { "anthropic" }
+    fn model(&self) -> &str { &self.model }
+    fn complete<'a>(&'a self, messages: &'a [AriaProviderMessage])
+        -> Pin<Box<dyn Future<Output = Result<AriaProviderCompletion>> + Send + 'a>> {
+        Box::pin(AriaAnthropicProvider::complete(self, messages))
+    }
+}
+
+/// Select a concrete protocol without changing the runtime chat contract.
+pub fn provider_from_environment() -> Result<Option<Arc<dyn AriaChatProvider>>> {
+    match std::env::var("JANUS_ARIA_PROVIDER_KIND")
+        .unwrap_or_else(|_| "openai-compatible".into()).as_str() {
+        "openai-compatible" => Ok(AriaModelProvider::from_environment()?
+            .map(|provider| Arc::new(provider) as Arc<dyn AriaChatProvider>)),
+        "anthropic" => Ok(AriaAnthropicProvider::from_environment()?
+            .map(|provider| Arc::new(provider) as Arc<dyn AriaChatProvider>)),
+        other => bail!("unsupported JANUS_ARIA_PROVIDER_KIND value: {other}"),
     }
 }
 
