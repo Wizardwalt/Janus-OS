@@ -59,7 +59,8 @@ class AriaImportActivity : AppCompatActivity() {
             .setView(input)
             .setPositiveButton("Connect and import") { _, _ ->
                 val serverUrl = input.text.toString().trim().trimEnd('/')
-                val parsed = RuntimeUrlPolicy.parse(serverUrl, BuildConfig.DEBUG)
+                val allowEmulatorHost = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                val parsed = RuntimeUrlPolicy.parse(serverUrl, allowEmulatorHost)
                 if (parsed == null) {
                     finishWithMessage(
                         "Remote Janus runtimes must use HTTPS. HTTP is allowed only for localhost " +
