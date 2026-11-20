@@ -538,11 +538,10 @@ mod tests {
             axum::response::Response::builder()
                 .status(axum::http::StatusCode::OK)
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .header(
-                    axum::http::header::CONTENT_LENGTH,
-                    (MAX_PROVIDER_RESPONSE_BYTES + 1).to_string(),
-                )
-                .body(axum::body::Body::empty())
+                .body(axum::body::Body::from(vec![
+                    b'x';
+                    MAX_PROVIDER_RESPONSE_BYTES + 1
+                ]))
                 .unwrap()
         }
         let app = Router::new().route("/v1/chat/completions", post(oversized));
