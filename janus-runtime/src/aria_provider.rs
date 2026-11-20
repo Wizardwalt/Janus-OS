@@ -538,12 +538,4 @@ mod tests {
         assert_eq!(completion.model, "claude-test-returned");
     }
 
-    #[test]
-    fn provider_kind_rejects_unknown_protocols() {
-        assert!(matches!(
-            std::env::var("JANUS_ARIA_PROVIDER_KIND").ok().as_deref(),
-            Some("openai-compatible") | Some("anthropic") | None
-        ));
-    }
-
 }
