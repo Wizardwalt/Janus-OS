@@ -1,7 +1,7 @@
 //! HTTP/WebSocket API server.
 
 use crate::{
-    aria_provider::{AriaChatProvider, AriaModelProvider, AriaProviderMessage},
+    aria_provider::{provider_from_environment, AriaChatProvider, AriaProviderMessage},
     executor::{PluginExecutor, PluginSummary},
     hardware::{HardwareAdapterStatus, HardwareManager},
     state::StateManager,
