@@ -113,7 +113,7 @@ class JanusWebActivity : AppCompatActivity() {
                   }
                   return;
                 }
-                const base = (localStorage.getItem('janus.runtimeUrl') || location.origin).replace(/\\/+$/, '');
+                const base = (localStorage.getItem('janus.runtimeUrl') || location.origin).replace(/\/+$/, '');
                 try {
                   const response = await fetch(base + '/aria/artifacts/text', {
                     method: 'POST',
