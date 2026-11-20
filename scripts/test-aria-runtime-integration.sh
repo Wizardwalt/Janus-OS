@@ -30,6 +30,17 @@ cleanup() {
     kill "$RUNTIME_PID" 2>/dev/null || true
     wait "$RUNTIME_PID" 2>/dev/null || true
   fi
+  # Preserve synthetic diagnostics even when an assertion fails mid-run.
+  if [[ -f "$TMP_DIR/results/test-results.txt" ]]; then
+    mkdir -p "$(dirname "${JANUS_TEST_RESULTS:-/tmp/janus-aria-runtime-test-results.txt}")"
+    cp "$TMP_DIR/results/test-results.txt" "${JANUS_TEST_RESULTS:-/tmp/janus-aria-runtime-test-results.txt}" || true
+  fi
+  if [[ -f "$TMP_DIR/runtime.log" ]]; then
+    cp "$TMP_DIR/runtime.log" "${JANUS_RUNTIME_LOG:-/tmp/janus-aria-runtime.log}" || true
+  fi
+  if [[ -f "$TMP_DIR/runtime-no-key.log" ]]; then
+    cp "$TMP_DIR/runtime-no-key.log" "${JANUS_RUNTIME_NO_KEY_LOG:-/tmp/janus-aria-runtime-no-key.log}" || true
+  fi
   if [[ "${KEEP_JANUS_TEST_DIR:-0}" != "1" ]]; then
     rm -rf "$TMP_DIR"
   else
