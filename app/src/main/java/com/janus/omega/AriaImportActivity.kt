@@ -13,9 +13,9 @@ import org.json.JSONObject
 import java.net.URI
 
 /**
- * Imports one user-approved OmniVault transcript through the existing
- * authenticated Janus runtime API. The bearer token stays inside WebView
- * sessionStorage and is never copied into native app storage or OmniVault.
+ * Imports one user-approved OmniVault snapshot into Aria's encrypted
+ * conversation history. The Janus bearer token remains inside WebView
+ * sessionStorage and is never copied into native storage or OmniVault.
  */
 class AriaImportActivity : AppCompatActivity() {
     private var webView: WebView? = null
@@ -24,13 +24,21 @@ class AriaImportActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val title = intent.getStringExtra(EXTRA_TITLE)
-        val text = intent.getStringExtra(EXTRA_TEXT)
-        if (title.isNullOrBlank() || text.isNullOrBlank()) {
+        val snapshotJson = intent.getStringExtra(EXTRA_SNAPSHOT)
+        val conversationId = intent.getStringExtra(EXTRA_CONVERSATION_ID)
+        if (title.isNullOrBlank() || snapshotJson.isNullOrBlank() || conversationId.isNullOrBlank()) {
             finishWithMessage("The OmniVault transfer is incomplete.")
             return
         }
-        if (text.toByteArray(Charsets.UTF_8).size > MAX_TEXT_BYTES || title.toByteArray(Charsets.UTF_8).size > 500) {
-            finishWithMessage("The OmniVault transfer exceeds Janus's import limit.")
+        if (snapshotJson.toByteArray(Charsets.UTF_8).size > MAX_TRANSFER_BYTES) {
+            finishWithMessage("The OmniVault transfer exceeds Janus's 1 MiB limit.")
+            return
+        }
+        val snapshot = runCatching { JSONObject(snapshotJson) }.getOrNull()
+        if (snapshot?.optString("schema") != "omnivault.aria-transfer.v1" ||
+            snapshot.optJSONArray("messages") == null
+        ) {
+            finishWithMessage("The OmniVault transfer format is not supported.")
             return
         }
 
@@ -44,8 +52,9 @@ class AriaImportActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("Connect to Janus runtime")
             .setMessage(
-                "Choose the Janus runtime address. The selected transcript will be sent only to this address, " +
-                    "using the currently signed-in Janus session. No Janus password or bearer token is shared with OmniVault."
+                "Choose the Janus runtime address. The selected conversation will be imported into " +
+                    "the signed-in account's encrypted Aria conversation history. Only this snapshot is sent. " +
+                    "No Janus password or bearer token is shared with OmniVault."
             )
             .setView(input)
             .setPositiveButton("Connect and import") { _, _ ->
@@ -55,7 +64,7 @@ class AriaImportActivity : AppCompatActivity() {
                     finishWithMessage("Enter a valid http:// or https:// Janus runtime URL.")
                 } else {
                     prefs.edit().putString(KEY_SERVER_URL, serverUrl).apply()
-                    openRuntime(serverUrl, title, text)
+                    openRuntime(serverUrl, title, snapshotJson, conversationId)
                 }
             }
             .setNegativeButton("Cancel") { _, _ -> finish() }
@@ -64,7 +73,7 @@ class AriaImportActivity : AppCompatActivity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun openRuntime(serverUrl: String, title: String, text: String) {
+    private fun openRuntime(serverUrl: String, title: String, snapshotJson: String, conversationId: String) {
         val view = WebView(this)
         webView = view
         view.settings.apply {
@@ -77,14 +86,17 @@ class AriaImportActivity : AppCompatActivity() {
         view.webChromeClient = WebChromeClient()
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val destination = request.url.toString()
-                return !destination.startsWith(serverUrl)
+                return !request.url.toString().startsWith(serverUrl)
+            }
+
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                injected = false
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 if (!injected && url.startsWith(serverUrl)) {
                     injected = true
-                    submitAfterLogin(view, title, text)
+                    submitAfterLogin(view, title, snapshotJson, conversationId)
                 }
             }
         }
@@ -92,45 +104,158 @@ class AriaImportActivity : AppCompatActivity() {
         view.loadUrl(serverUrl)
     }
 
-    private fun submitAfterLogin(view: WebView, title: String, text: String) {
+    /**
+     * Reconstruct the selected message sequence and append it idempotently to
+     * the owner's encrypted ConversationStore. Existing event IDs are skipped,
+     * so retrying a partial import does not duplicate already stored messages.
+     */
+    private fun submitAfterLogin(
+        view: WebView,
+        title: String,
+        snapshotJson: String,
+        conversationId: String
+    ) {
         val safeTitle = JSONObject.quote(title)
-        val safeText = JSONObject.quote(text)
+        val safeSnapshot = JSONObject.quote(snapshotJson)
+        val safeConversationId = JSONObject.quote(conversationId)
         val script = """
             (function () {
               const title = $safeTitle;
-              const text = $safeText;
-              let attempts = 0;
+              const snapshot = JSON.parse($safeSnapshot);
+              const conversationId = $safeConversationId;
+              const sourceProvider = String(snapshot.provider || 'Unknown').slice(0, 80);
+              const provider = ('OmniVault / ' + sourceProvider).slice(0, 128);
+              const digest = conversationId.replace(/^omnivault_/, '');
+              const messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+              const maxChunkBytes = 60000;
+
+              function splitUtf8(text) {
+                const encoder = new TextEncoder();
+                const chunks = [];
+                let current = '';
+                let currentBytes = 0;
+                for (const character of text) {
+                  const size = encoder.encode(character).length;
+                  if (currentBytes + size > maxChunkBytes && current.length > 0) {
+                    chunks.push(current);
+                    current = '';
+                    currentBytes = 0;
+                  }
+                  current += character;
+                  currentBytes += size;
+                }
+                if (current.length > 0) chunks.push(current);
+                return chunks;
+              }
+
+              function normalizedRole(value) {
+                const role = String(value || '').toLowerCase();
+                if (role === 'system') return 'system';
+                if (role === 'assistant' || role === 'model') return 'assistant';
+                if (role === 'tool') return 'tool';
+                return 'user';
+              }
+
+              function eventTime(value) {
+                if (typeof value !== 'string') return null;
+                const parsed = Date.parse(value);
+                return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+              }
+
+              async function requestJson(url, options) {
+                const response = await fetch(url, options);
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                  throw new Error(payload.error || ('Janus runtime returned HTTP ' + response.status));
+                }
+                return payload;
+              }
+
               async function submitWhenSignedIn() {
+                let attempts = 0;
+                while (!sessionStorage.getItem('janus.sessionToken') && attempts < 180) {
+                  attempts += 1;
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                }
                 const token = sessionStorage.getItem('janus.sessionToken');
                 if (!token) {
-                  attempts += 1;
-                  if (attempts < 180) {
-                    setTimeout(submitWhenSignedIn, 1000);
-                  } else {
-                    alert('Janus sign-in was not detected. No transcript was imported. Sign in and share the conversation again.');
-                  }
+                  alert('Janus sign-in was not detected. No conversation was imported. Sign in and share again.');
                   return;
                 }
+
                 const base = (localStorage.getItem('janus.runtimeUrl') || location.origin).replace(/\/+$/, '');
-                try {
-                  const response = await fetch(base + '/aria/artifacts/text', {
+                const headers = {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer ' + token
+                };
+                const endpoint = base + '/aria/conversations/' + encodeURIComponent(conversationId) + '/events';
+                const existingPayload = await requestJson(endpoint + '?limit=1000', { method: 'GET', headers: headers });
+                const existingIds = new Set((Array.isArray(existingPayload.data) ? existingPayload.data : [])
+                  .map(event => event.event_id));
+
+                let imported = 0;
+                let skipped = 0;
+                const metadataId = 'ov_' + digest + '_0000_0000';
+                if (!existingIds.has(metadataId)) {
+                  const metadata = {
+                    event_id: metadataId,
+                    role: 'system',
+                    content: 'Imported from OmniVault. Conversation title: ' + title +
+                      '. Source provider: ' + sourceProvider +
+                      '. Original source conversation reference: ' + String(snapshot.id || '').slice(0, 160) + '.',
+                    provider: provider,
+                    model: null,
+                    created_at: eventTime(snapshot.created_at)
+                  };
+                  await requestJson(endpoint, {
                     method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': 'Bearer ' + token
-                    },
-                    body: JSON.stringify({ title: title, text: text })
+                    headers: headers,
+                    body: JSON.stringify(metadata)
                   });
-                  const payload = await response.json().catch(() => ({}));
-                  if (!response.ok) {
-                    throw new Error(payload.error || ('Runtime returned HTTP ' + response.status));
-                  }
-                  alert('Imported into Aria as a private knowledge artifact.');
-                } catch (error) {
-                  alert('Aria import failed: ' + (error && error.message ? error.message : 'Runtime unavailable.'));
+                  existingIds.add(metadataId);
+                  imported += 1;
+                } else {
+                  skipped += 1;
                 }
+
+                for (let index = 0; index < messages.length; index += 1) {
+                  const message = messages[index] || {};
+                  const content = String(message.content || '');
+                  if (!content.trim()) continue;
+                  const pieces = splitUtf8(content);
+                  for (let part = 0; part < pieces.length; part += 1) {
+                    const eventId = 'ov_' + digest + '_' +
+                      String(index + 1).padStart(4, '0') + '_' +
+                      String(part).padStart(4, '0');
+                    if (existingIds.has(eventId)) {
+                      skipped += 1;
+                      continue;
+                    }
+                    const event = {
+                      event_id: eventId,
+                      role: normalizedRole(message.role),
+                      content: pieces[part],
+                      provider: provider,
+                      model: null,
+                      created_at: eventTime(message.timestamp)
+                    };
+                    await requestJson(endpoint, {
+                      method: 'POST',
+                      headers: headers,
+                      body: JSON.stringify(event)
+                    });
+                    existingIds.add(eventId);
+                    imported += 1;
+                  }
+                }
+                alert('Aria conversation import complete. Added ' + imported +
+                  ' event(s); skipped ' + skipped + ' previously imported event(s).');
               }
-              submitWhenSignedIn();
+
+              submitWhenSignedIn().catch(error => {
+                alert('Aria conversation import failed: ' +
+                  (error && error.message ? error.message : 'Janus runtime unavailable.'));
+              });
             })();
         """.trimIndent()
         view.evaluateJavascript(script, null)
@@ -154,10 +279,11 @@ class AriaImportActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_TITLE = "com.janus.omega.extra.OMNIVAULT_TITLE"
-        const val EXTRA_TEXT = "com.janus.omega.extra.OMNIVAULT_TEXT"
+        const val EXTRA_SNAPSHOT = "com.janus.omega.extra.OMNIVAULT_SNAPSHOT"
+        const val EXTRA_CONVERSATION_ID = "com.janus.omega.extra.OMNIVAULT_CONVERSATION_ID"
         private const val PREFS = "janus_prefs"
         private const val KEY_SERVER_URL = "server_url"
         private const val DEFAULT_SERVER_URL = "http://10.0.2.2:5000"
-        private const val MAX_TEXT_BYTES = 1024 * 1024
+        private const val MAX_TRANSFER_BYTES = 1024 * 1024
     }
 }
