@@ -87,6 +87,58 @@ fn discover_usb_devices_at(root: &Path) -> Result<Vec<UsbDeviceDescriptor>> {
     Ok(devices)
 }
 
+/// Read-only Linux thermal sensor sample. No device controls are exposed.
+#[derive(Debug, Clone, Serialize)]
+pub struct ThermalSensorReading {
+    pub sensor_id: String,
+    pub sensor_type: String,
+    pub temperature_celsius: Option<f64>,
+}
+
+fn read_thermal_attribute(directory: &Path, name: &str) -> Option<String> {
+    fs::read_to_string(directory.join(name))
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn discover_thermal_sensors_at(root: &Path) -> Result<Vec<ThermalSensorReading>> {
+    let mut sensors = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let directory = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            let resolved = match directory.canonicalize() {
+                Ok(path) if path.starts_with("/sys/devices") => path,
+                _ => continue,
+            };
+            if !resolved.is_dir() {
+                continue;
+            }
+        } else if !file_type.is_dir() {
+            continue;
+        }
+        let Some(sensor_type) = read_thermal_attribute(&directory, "type") else {
+            continue;
+        };
+        let temperature_celsius = read_thermal_attribute(&directory, "temp")
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|value| (-40_000..=200_000).contains(value))
+            .map(|millidegrees| millidegrees as f64 / 1_000.0);
+        sensors.push(ThermalSensorReading {
+            sensor_id: entry.file_name().to_string_lossy().into_owned(),
+            sensor_type,
+            temperature_celsius,
+        });
+        if sensors.len() >= 128 {
+            break;
+        }
+    }
+    sensors.sort_by(|left, right| left.sensor_id.cmp(&right.sensor_id));
+    Ok(sensors)
+}
+
 /// Read-only inventory entry for a serial device; serial numbers are intentionally omitted.
 #[derive(Debug, Clone, Serialize)]
 pub struct DiscoveredSerialPort {
@@ -378,6 +430,17 @@ impl HardwareManager {
             .await?
     }
 
+    /// Read Linux thermal-zone metadata and temperatures without changing device state.
+    pub async fn discover_thermal_sensors(&self) -> Result<Vec<ThermalSensorReading>> {
+        if !self.enabled {
+            anyhow::bail!("hardware integration is disabled by configuration");
+        }
+        tokio::task::spawn_blocking(|| {
+            discover_thermal_sensors_at(Path::new("/sys/class/thermal"))
+        })
+        .await?
+    }
+
     /// Enumerate serial endpoints without opening, probing, or transmitting to devices.
     pub async fn discover_serial_ports(&self) -> Result<Vec<DiscoveredSerialPort>> {
         if !self.enabled {
@@ -532,6 +595,39 @@ mod hardware_configuration_tests {
     }
 }
 
+
+#[cfg(test)]
+mod thermal_inventory_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn thermal_inventory_reads_values_sorts_and_skips_invalid_zones() {
+        let root = std::env::temp_dir().join(format!("janus-thermal-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        for (id, kind, temp) in [
+            ("thermal_zone2", "gpu", "52000"),
+            ("thermal_zone0", "cpu", "41500"),
+        ] {
+            let directory = root.join(id);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("type"), kind).unwrap();
+            fs::write(directory.join("temp"), temp).unwrap();
+        }
+        let invalid = root.join("thermal_zone1");
+        fs::create_dir_all(&invalid).unwrap();
+        fs::write(invalid.join("type"), "unknown").unwrap();
+        fs::write(invalid.join("temp"), "999999").unwrap();
+
+        let sensors = discover_thermal_sensors_at(&root).unwrap();
+        assert_eq!(sensors.len(), 3);
+        assert_eq!(sensors[0].sensor_id, "thermal_zone0");
+        assert_eq!(sensors[0].temperature_celsius, Some(41.5));
+        assert_eq!(sensors[1].sensor_type, "unknown");
+        assert_eq!(sensors[1].temperature_celsius, None);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
 
 #[cfg(test)]
 mod usb_inventory_tests {

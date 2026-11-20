@@ -3,7 +3,7 @@
 use crate::{
     aria_provider::{provider_from_environment, AriaChatProvider, AriaProviderMessage},
     executor::{PluginExecutor, PluginSummary},
-    hardware::{DiscoveredSerialPort, HardwareAdapterStatus, HardwareManager, UsbDeviceDescriptor},
+    hardware::{DiscoveredSerialPort, HardwareAdapterStatus, HardwareManager, ThermalSensorReading, UsbDeviceDescriptor},
     state::StateManager,
 };
 use anyhow::{Context, Result};
@@ -424,6 +424,7 @@ impl ApiServer {
             .route("/hardware/status", get(hardware_status))
             .route("/hardware/serial/ports", get(hardware_serial_ports))
             .route("/hardware/usb/devices", get(hardware_usb_devices))
+            .route("/hardware/thermal/sensors", get(hardware_thermal_sensors))
             .route("/auth/bootstrap", post(bootstrap))
             .route("/auth/login", post(login))
             .route("/auth/me", get(current_user))
@@ -1461,6 +1462,33 @@ async fn hardware_usb_devices(
                 status: "error".into(),
                 data: None,
                 error: Some(format!("USB inventory unavailable: {error}")),
+            }),
+        ),
+    }
+}
+
+async fn hardware_thermal_sensors(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<Vec<ThermalSensorReading>>>) {
+    if let Err(error) = authenticated_account(&state.state_manager, &headers).await {
+        return unauthorized_response(error);
+    }
+    match state.hardware.discover_thermal_sensors().await {
+        Ok(sensors) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                status: "success".into(),
+                data: Some(sensors),
+                error: None,
+            }),
+        ),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse {
+                status: "error".into(),
+                data: None,
+                error: Some(format!("thermal sensor inventory unavailable: {error}")),
             }),
         ),
     }
