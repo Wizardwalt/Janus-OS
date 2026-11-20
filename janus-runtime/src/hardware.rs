@@ -6,7 +6,7 @@ use std::{
     io::{Read, Write},
     sync::{Arc, Mutex},
     time::Duration,
-    path::{Path, PathBuf},
+    path::Path,
     fs,
 };
 use tokio::sync::RwLock;
