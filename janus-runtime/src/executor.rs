@@ -53,7 +53,12 @@ impl Drop for PluginCancellationGuard {
 pub struct PluginExecutor {
     config: Config,
     loader: PluginLoader,
+    /// Bounds aggregate in-process plugin concurrency; this is not OS isolation.
+    execution_slots: Arc<tokio::sync::Semaphore>,
 }
+
+const MAX_CONCURRENT_PLUGIN_EXECUTIONS: usize = 2;
+const MAX_PLUGIN_QUEUE_WAIT: Duration = Duration::from_secs(2);
 
 impl PluginExecutor {
     /// Create new plugin executor
@@ -62,6 +67,7 @@ impl PluginExecutor {
         Ok(Self {
             config: config.clone(),
             loader,
+            execution_slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PLUGIN_EXECUTIONS)),
         })
     }
 
@@ -112,6 +118,17 @@ impl PluginExecutor {
         // has a vetted host implementation and an explicit grant path, deny it.
         validate_plugin_capabilities(&plugin.manifest.capabilities)?;
 
+        // Bound aggregate in-process execution so callers cannot create an
+        // unbounded number of CPU-bound blocking workers. A slot stays held until
+        // the worker actually exits, including after a timeout/cancellation signal.
+        let permit = tokio::time::timeout(
+            MAX_PLUGIN_QUEUE_WAIT,
+            Arc::clone(&self.execution_slots).acquire_owned(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("plugin execution capacity is busy; retry shortly"))?
+        .map_err(|_| anyhow::anyhow!("plugin execution capacity is unavailable"))?;
+
         // Lua execution is synchronous and CPU-bound. Keep it off Tokio's async
         // worker threads and signal cooperative cancellation on timeout or request
         // cancellation. This is still not an OS process/security boundary.
@@ -120,6 +137,7 @@ impl PluginExecutor {
         let _cancellation_guard = PluginCancellationGuard(Arc::clone(&cancelled));
         let worker_cancelled = Arc::clone(&cancelled);
         let mut worker = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let sandbox = crate::lua::PluginSandbox::new()?;
             sandbox.execute_with_cancellation(&code, args, worker_cancelled)
         });
@@ -161,6 +179,22 @@ impl PluginExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn execution_slots_bound_concurrency_and_release_only_when_worker_finishes() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(2));
+        let first = Arc::clone(&slots).acquire_owned().await.unwrap();
+        let second = Arc::clone(&slots).acquire_owned().await.unwrap();
+        assert_eq!(slots.available_permits(), 0);
+        assert!(tokio::time::timeout(
+            Duration::from_millis(10),
+            Arc::clone(&slots).acquire_owned()
+        ).await.is_err());
+        drop(first);
+        assert_eq!(slots.available_permits(), 1);
+        drop(second);
+        assert_eq!(slots.available_permits(), 2);
+    }
 
     #[test]
     fn capability_policy_allows_only_safe_logging_or_no_capabilities() {
