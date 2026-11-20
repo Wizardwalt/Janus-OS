@@ -189,9 +189,16 @@ class AriaImportActivity : AppCompatActivity() {
                   'Authorization': 'Bearer ' + token
                 };
                 const endpoint = base + '/aria/conversations/' + encodeURIComponent(conversationId) + '/events';
-                const existingPayload = await requestJson(endpoint + '?limit=1000', { method: 'GET', headers: headers });
-                const existingIds = new Set((Array.isArray(existingPayload.data) ? existingPayload.data : [])
-                  .map(event => event.event_id));
+                const existingIds = new Set();
+                let cursor = null;
+                while (true) {
+                  const query = '?limit=1000' + (cursor ? '&after_event_id=' + encodeURIComponent(cursor) : '');
+                  const existingPayload = await requestJson(endpoint + query, { method: 'GET', headers: headers });
+                  const page = Array.isArray(existingPayload.data) ? existingPayload.data : [];
+                  page.forEach(event => existingIds.add(event.event_id));
+                  if (page.length < 1000) break;
+                  cursor = page[page.length - 1].event_id;
+                }
 
                 let imported = 0;
                 let skipped = 0;
