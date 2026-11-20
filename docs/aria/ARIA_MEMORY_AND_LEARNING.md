@@ -105,7 +105,7 @@ Owner and organization identifiers are derived from the authenticated Janus sess
 - source passages from preserved and access-scoped artifacts, with SHA-256 and byte locators;
 - active personal memories belonging only to the owner ID supplied by the authenticated host.
 
-Results are deterministically sorted by literal query match count. The host supplies independent knowledge and artifact scopes and the authenticated owner ID. The Janus Runtime exposes this through the authenticated `/aria/search` API. It is not yet wired into the scripted Aria chat panel, semantic/vector ranking, or model context assembly.
+Results are deterministically sorted by literal query match count. The host supplies independent knowledge and artifact scopes and the authenticated owner ID. The Janus Runtime exposes this through the authenticated `/aria/search` API. The authenticated `/aria/chat` path also supports an unchecked-by-default `include_private_context` option; when enabled, it retrieves owner-scoped knowledge, source passages, and encrypted personal memories and supplies them to the configured provider as untrusted reference material under a fixed context-size cap. This is not semantic/vector ranking, and it does not yet retrieve from OmniVault because the cross-app bridge is not implemented.
 
 ## Implemented read-only OmniVault snapshot import contract
 
@@ -134,12 +134,12 @@ The following are not claimed as implemented:
 
 - standards-complete PDF and DOCX parsers, full HTML5 parsing, image/OCR, and archive extraction adapters; the current HTML helper is deliberately conservative;
 - an end-to-end authenticated host/API that connects artifact ingestion, proposal review, and knowledge persistence atomically;
-- private per-user conversation events and explicit long-term memory controls;
-- unified retrieval across artifact chunks, reviewed knowledge, and approved conversation context (artifact chunk search now returns source-cited passages);
+- stronger API-level negative tests for cross-account conversation/memory access and a documented retention/expiry policy; encrypted owner-scoped conversation events and explicit remember/list/correct/forget APIs already exist in separate runtime stores;
+- unified retrieval across Janus artifact chunks, reviewed knowledge, and encrypted personal memories is implemented; the live chat path can opt into this Janus context. Approved OmniVault conversations are not yet retrievable through live chat because the cross-app bridge is not implemented;
 - calibrated semantic/model-based Multicolored Hat classification with human correction; the deterministic keyword baseline is implemented but is only advisory;
 - contradiction detection, re-review scheduling, retention/deletion workflows, and learning evaluation;
 - Live authenticated OmniVault-to-Janus host bridge and user consent UI; the read-only snapshot import contract exists, but the current Android gateway has no cross-app endpoint;
-- backup/restore coverage for all Aria-specific stores.
+- key rotation/recovery and backup/restore coverage for all Aria-specific stores, including a migration path to OmniVault as canonical memory.
 
 ## Developer verification
 
