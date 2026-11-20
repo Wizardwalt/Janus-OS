@@ -1,7 +1,7 @@
 //! HTTP/WebSocket API server.
 
 use crate::{
-    aria_provider::{AriaChatProvider, AriaModelProvider, AriaProviderMessage},
+    aria_provider::{provider_from_environment, AriaChatProvider, AriaProviderMessage},
     executor::{PluginExecutor, PluginSummary},
     hardware::{HardwareAdapterStatus, HardwareManager},
     state::StateManager,
@@ -365,8 +365,7 @@ impl ApiServer {
         let aria_path = self.config.db_path.with_extension("aria.sqlite");
         let aria = AriaRuntimeStores::open(&aria_path)
             .with_context(|| format!("opening Aria stores at {}", aria_path.display()))?;
-        let aria_provider = AriaModelProvider::from_environment()?
-            .map(|provider| Arc::new(provider) as Arc<dyn AriaChatProvider>);
+        let aria_provider = provider_from_environment()?;
         let api_state = ApiState {
             config: self.config.clone(),
             state_manager: self.state_manager,
