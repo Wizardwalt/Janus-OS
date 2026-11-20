@@ -3,7 +3,7 @@
 use crate::{
     aria_provider::{provider_from_environment, AriaChatProvider, AriaProviderMessage},
     executor::{PluginExecutor, PluginSummary},
-    hardware::{DiscoveredSerialPort, HardwareAdapterStatus, HardwareManager, ThermalSensorReading, UsbDeviceDescriptor},
+    hardware::{DiscoveredSerialPort, HardwareAdapterStatus, HardwareManager, MemoryInventory, ThermalSensorReading, UsbDeviceDescriptor},
     state::StateManager,
 };
 use anyhow::{Context, Result};
@@ -425,6 +425,7 @@ impl ApiServer {
             .route("/hardware/serial/ports", get(hardware_serial_ports))
             .route("/hardware/usb/devices", get(hardware_usb_devices))
             .route("/hardware/thermal/sensors", get(hardware_thermal_sensors))
+            .route("/hardware/memory", get(hardware_memory_inventory))
             .route("/auth/bootstrap", post(bootstrap))
             .route("/auth/login", post(login))
             .route("/auth/me", get(current_user))
@@ -1462,6 +1463,33 @@ async fn hardware_usb_devices(
                 status: "error".into(),
                 data: None,
                 error: Some(format!("USB inventory unavailable: {error}")),
+            }),
+        ),
+    }
+}
+
+async fn hardware_memory_inventory(
+    AxumState(state): AxumState<ApiState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<MemoryInventory>>) {
+    if let Err(error) = authenticated_account(&state.state_manager, &headers).await {
+        return unauthorized_response(error);
+    }
+    match state.hardware.memory_inventory().await {
+        Ok(memory) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                status: "success".into(),
+                data: Some(memory),
+                error: None,
+            }),
+        ),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse {
+                status: "error".into(),
+                data: None,
+                error: Some(format!("memory inventory unavailable: {error}")),
             }),
         ),
     }
