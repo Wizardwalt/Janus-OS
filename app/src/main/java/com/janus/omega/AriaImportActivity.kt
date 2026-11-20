@@ -59,12 +59,16 @@ class AriaImportActivity : AppCompatActivity() {
             .setView(input)
             .setPositiveButton("Connect and import") { _, _ ->
                 val serverUrl = input.text.toString().trim().trimEnd('/')
-                val parsed = runCatching { URI(serverUrl) }.getOrNull()
-                if (parsed == null || parsed.scheme !in setOf("http", "https") || parsed.host.isNullOrBlank()) {
-                    finishWithMessage("Enter a valid http:// or https:// Janus runtime URL.")
+                val parsed = RuntimeUrlPolicy.parse(serverUrl, BuildConfig.DEBUG)
+                if (parsed == null) {
+                    finishWithMessage(
+                        "Remote Janus runtimes must use HTTPS. HTTP is allowed only for localhost " +
+                            "(and 10.0.2.2 in debug emulator builds)."
+                    )
                 } else {
-                    prefs.edit().putString(KEY_SERVER_URL, serverUrl).apply()
-                    openRuntime(serverUrl, title, snapshotJson, conversationId)
+                    val normalizedServerUrl = parsed.toString().trimEnd('/')
+                    prefs.edit().putString(KEY_SERVER_URL, normalizedServerUrl).apply()
+                    openRuntime(normalizedServerUrl, parsed, title, snapshotJson, conversationId)
                 }
             }
             .setNegativeButton("Cancel") { _, _ -> finish() }
@@ -73,7 +77,7 @@ class AriaImportActivity : AppCompatActivity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun openRuntime(serverUrl: String, title: String, snapshotJson: String, conversationId: String) {
+    private fun openRuntime(serverUrl: String, runtimeUri: URI, title: String, snapshotJson: String, conversationId: String) {
         val view = WebView(this)
         webView = view
         view.settings.apply {
@@ -86,15 +90,15 @@ class AriaImportActivity : AppCompatActivity() {
         view.webChromeClient = WebChromeClient()
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                return !request.url.toString().startsWith(serverUrl)
+                return !RuntimeUrlPolicy.sameOrigin(runtimeUri, request.url.toString())
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                injected = false
+                if (RuntimeUrlPolicy.sameOrigin(runtimeUri, url)) injected = false
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                if (!injected && url.startsWith(serverUrl)) {
+                if (!injected && RuntimeUrlPolicy.sameOrigin(runtimeUri, url)) {
                     injected = true
                     submitAfterLogin(view, title, snapshotJson, conversationId)
                 }
@@ -183,7 +187,7 @@ class AriaImportActivity : AppCompatActivity() {
                   return;
                 }
 
-                const base = (localStorage.getItem('janus.runtimeUrl') || location.origin).replace(/\/+$/, '');
+                const base = location.origin;
                 const headers = {
                   'Content-Type': 'application/json',
                   'Authorization': 'Bearer ' + token
@@ -290,7 +294,7 @@ class AriaImportActivity : AppCompatActivity() {
         const val EXTRA_CONVERSATION_ID = "com.janus.omega.extra.OMNIVAULT_CONVERSATION_ID"
         private const val PREFS = "janus_prefs"
         private const val KEY_SERVER_URL = "server_url"
-        private const val DEFAULT_SERVER_URL = "http://10.0.2.2:5000"
+        private const val DEFAULT_SERVER_URL = ""
         private const val MAX_TRANSFER_BYTES = 1024 * 1024
     }
 }
