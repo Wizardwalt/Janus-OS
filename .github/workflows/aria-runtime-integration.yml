@@ -63,5 +63,6 @@ jobs:
           path: |
             /tmp/janus-aria-runtime-test-results.txt
             /tmp/janus-aria-runtime.log
+            /tmp/janus-aria-runtime-no-key.log
           if-no-files-found: warn
           retention-days: 14
