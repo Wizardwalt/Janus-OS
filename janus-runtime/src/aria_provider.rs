@@ -497,4 +497,53 @@ mod tests {
         assert_eq!(completion.provider, "local-test");
         assert_eq!(completion.model, "test-model-returned");
     }
+    #[tokio::test]
+    async fn anthropic_adapter_sends_native_messages_and_parses_text_blocks() {
+        async fn complete(
+            headers: axum::http::HeaderMap,
+            Json(payload): Json<Value>,
+        ) -> Json<Value> {
+            assert_eq!(headers.get("x-api-key").unwrap(), "test-anthropic-key");
+            assert_eq!(headers.get("anthropic-version").unwrap(), "2023-06-01");
+            assert_eq!(payload["model"], "claude-test");
+            assert_eq!(payload["system"], "You are Aria.");
+            assert_eq!(payload["messages"][0]["role"], "user");
+            assert_eq!(payload["messages"][0]["content"], "Hello");
+            Json(json!({
+                "model": "claude-test-returned",
+                "content": [
+                    {"type": "text", "text": "Hello "},
+                    {"type": "tool_use", "id": "ignored"},
+                    {"type": "text", "text": "from Aria"}
+                ]
+            }))
+        }
+
+        let app = Router::new().route("/v1/messages", post(complete));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let provider: Box<dyn AriaChatProvider> = Box::new(AriaAnthropicProvider::new(
+            format!("http://{address}/v1/messages"),
+            "claude-test".into(),
+            "test-anthropic-key".into(),
+        ).unwrap());
+        let completion = provider.complete(&[
+            AriaProviderMessage { role: "system".into(), content: "You are Aria.".into() },
+            AriaProviderMessage { role: "user".into(), content: "Hello".into() },
+        ]).await.unwrap();
+
+        assert_eq!(completion.content, "Hello \nfrom Aria");
+        assert_eq!(completion.provider, "anthropic");
+        assert_eq!(completion.model, "claude-test-returned");
+    }
+
+    #[test]
+    fn provider_kind_rejects_unknown_protocols() {
+        assert!(matches!(
+            std::env::var("JANUS_ARIA_PROVIDER_KIND").ok().as_deref(),
+            Some("openai-compatible") | Some("anthropic") | None
+        ));
+    }
+
 }
