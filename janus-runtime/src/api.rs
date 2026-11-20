@@ -164,6 +164,7 @@ struct AriaConversationListQuery {
 #[derive(Deserialize)]
 struct AriaConversationEventsQuery {
     limit: Option<usize>,
+    after_event_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -834,8 +835,11 @@ async fn aria_conversation_events(
     };
     let result = match state.aria.lock() {
         Ok(stores) => match stores.conversations.as_ref() {
-            Some(store) => store.list_events(
-                &account.id, &conversation_id, query.limit.unwrap_or(100),
+            Some(store) => store.list_events_after(
+                &account.id,
+                &conversation_id,
+                query.after_event_id.as_deref(),
+                query.limit.unwrap_or(100),
             ),
             None => return aria_conversation_store_unavailable(),
         },
