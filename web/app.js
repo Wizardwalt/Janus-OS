@@ -757,6 +757,7 @@ function openAriaChat() {
 }
 
 function closeAriaChat() {
+  cancelLiveAriaMessage();
   document.getElementById('aria-chat-overlay').classList.add('hidden');
 }
 
@@ -986,6 +987,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Quick chat
   document.getElementById('aria-chat-close')?.addEventListener('click', closeAriaChat);
   document.getElementById('aria-send-btn')?.addEventListener('click', sendAriaMessage);
+  document.getElementById('aria-cancel-btn')?.addEventListener('click', cancelLiveAriaMessage);
   document.getElementById('aria-input')?.addEventListener('keydown', e => { if (e.key==='Enter') sendAriaMessage(); });
   document.getElementById('aria-chat-overlay')?.addEventListener('click', e => {
     if (e.target.id === 'aria-chat-overlay') closeAriaChat();
@@ -994,6 +996,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ARIA full view
   document.getElementById('aria-view-back')?.addEventListener('click', closeAriaView);
   document.getElementById('aria-view-send-btn')?.addEventListener('click', sendAriaViewMessage);
+  document.getElementById('aria-view-cancel-btn')?.addEventListener('click', cancelLiveAriaMessage);
   document.getElementById('aria-view-input')?.addEventListener('keydown', e => { if (e.key==='Enter') sendAriaViewMessage(); });
 
   // Projection
