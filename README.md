@@ -101,11 +101,11 @@ The legacy WebSocket Lua runner is available only when `JANUS_DEMO_MODE=1` is ex
 
 ### ARIA status
 
-ARIA's current chat replies and periodic thoughts are scripted interface text. They do not represent a connected language model, live network monitoring, radio scanning, or persistent learning. Live AI integration and verified telemetry are future integrations; the interface must not present simulated text as operational results.
+The authenticated browser Aria chat uses the Janus Runtime's configurable server-side provider adapters when a user is signed in and a provider is configured. The legacy WebSocket chat and its periodic idle thoughts remain scripted demo behavior. Scripted thoughts do not represent independent cognition, live network monitoring, radio scanning, or persistent learning. Provider adapters do not prove credentials are configured or that a live provider has been accepted on a target device.
 
 ### Aria knowledge foundation
 
-The provider-independent Aria foundation is documented in [docs/aria](docs/aria/README.md). It defines Aria's constitution, ten-domain Multicolored Hat registry, portable knowledge records, and an initial SQLite-backed knowledge store with provenance, correction history, and scoped retrieval. This foundation is not yet connected to the scripted avatar/chat interface; live model, learning, voice, and tool integrations remain future work.
+The provider-independent Aria foundation is documented in [docs/aria](docs/aria/README.md). It includes the authenticated provider-backed chat path, encrypted owner-scoped conversation history, a ten-domain Multicolored Hat knowledge registry, provenance-aware knowledge storage, source-preserving ingestion, a human-reviewed learning queue, and explicit encrypted personal-memory APIs. OmniVault is designated as Aria's intended canonical long-term memory, but the current connection is only a read-only snapshot contract—not a live cross-app bridge. Autonomous background learning, streaming, voice, a production tool gateway, and portable cross-device identity/recovery remain future work.
 
 ### Hardware status
 
