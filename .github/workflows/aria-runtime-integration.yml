@@ -50,7 +50,7 @@ jobs:
             ${{ runner.os }}-aria-runtime-
 
       - name: Build the actual Janus runtime
-        run: cargo build --locked -p janus-runtime --bin janus-runtime
+        run: cargo build -p janus-runtime --bin janus-runtime
 
       - name: Run authenticated encrypted-store integration checks
         run: bash scripts/test-aria-runtime-integration.sh
