@@ -27,6 +27,54 @@ pub trait HardwareInterface: Send + Sync {
     fn available(&self) -> bool;
 }
 
+/// Read-only inventory entry for a serial device; serial numbers are intentionally omitted.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveredSerialPort {
+    pub port_name: String,
+    pub transport: String,
+    pub vendor_id: Option<u16>,
+    pub product_id: Option<u16>,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+}
+
+fn describe_serial_port(port: serialport::SerialPortInfo) -> DiscoveredSerialPort {
+    match port.port_type {
+        serialport::SerialPortType::UsbPort(usb) => DiscoveredSerialPort {
+            port_name: port.port_name,
+            transport: "usb".into(),
+            vendor_id: Some(usb.vid),
+            product_id: Some(usb.pid),
+            manufacturer: usb.manufacturer,
+            product: usb.product,
+        },
+        serialport::SerialPortType::PciPort => DiscoveredSerialPort {
+            port_name: port.port_name,
+            transport: "pci".into(),
+            vendor_id: None,
+            product_id: None,
+            manufacturer: None,
+            product: None,
+        },
+        serialport::SerialPortType::BluetoothPort => DiscoveredSerialPort {
+            port_name: port.port_name,
+            transport: "bluetooth".into(),
+            vendor_id: None,
+            product_id: None,
+            manufacturer: None,
+            product: None,
+        },
+        serialport::SerialPortType::Unknown => DiscoveredSerialPort {
+            port_name: port.port_name,
+            transport: "unknown".into(),
+            vendor_id: None,
+            product_id: None,
+            manufacturer: None,
+            product: None,
+        },
+    }
+}
+
 /// Serial port interface
 pub struct SerialInterface {
     port: String,
@@ -259,6 +307,19 @@ impl HardwareManager {
             rf: Arc::new(RwLock::new(RfInterface::new())),
             sensors: Arc::new(RwLock::new(SensorInterface::new())),
         }
+    }
+
+    /// Enumerate serial endpoints without opening, probing, or transmitting to devices.
+    pub async fn discover_serial_ports(&self) -> Result<Vec<DiscoveredSerialPort>> {
+        if !self.enabled {
+            anyhow::bail!("hardware integration is disabled by configuration");
+        }
+        tokio::task::spawn_blocking(|| {
+            serialport::available_ports()
+                .map(|ports| ports.into_iter().map(describe_serial_port).collect())
+                .map_err(anyhow::Error::from)
+        })
+        .await?
     }
 
     pub async fn initialize(&self) -> Result<()> {
