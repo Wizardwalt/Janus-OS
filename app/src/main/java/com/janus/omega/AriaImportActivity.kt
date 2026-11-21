@@ -231,7 +231,7 @@ class AriaImportActivity : AppCompatActivity() {
                 if (!existingIds.has(metadataId)) {
                   const metadata = {
                     event_id: metadataId,
-                    role: 'system',
+                    role: 'user',
                     content: 'Imported from OmniVault. Conversation title: ' + title +
                       '. Source provider: ' + sourceProvider +
                       '. Original source conversation reference: ' + String(snapshot.id || '').slice(0, 160) + '.',
