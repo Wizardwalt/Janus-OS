@@ -15,7 +15,7 @@ internal fun normalizeAriaImportedMessage(sourceRole: String?, content: String):
         "assistant", "model" -> NormalizedAriaImportMessage("assistant", content)
         "user", "" -> NormalizedAriaImportMessage("user", content)
         else -> {
-            val label = role.take(40).ifBlank { "unknown" }
+            val label = role.filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(40).ifBlank { "unknown" }
             NormalizedAriaImportMessage("user", "[Imported source role: $label]\n$content")
         }
     }
