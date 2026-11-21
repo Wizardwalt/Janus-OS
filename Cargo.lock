@@ -1144,6 +1144,7 @@ dependencies = [
  "chrono",
  "clap",
  "janus-core",
+ "libc",
  "machine-uid",
  "mlua 0.9.9",
  "reqwest",

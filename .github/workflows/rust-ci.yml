@@ -88,11 +88,12 @@ jobs:
           [ "$LUA" -gt 2000 ] || { echo "Module count too low"; exit 1; }
 
       - name: Release build (runtime and web)
-        run: cargo build --release --bin janus-runtime --bin janus-web
+        run: cargo build --release --bin janus-runtime --bin janus-plugin-worker --bin janus-web
 
       - name: Confirm both release binaries exist
         run: |
           test -x target/release/janus-runtime
+          test -x target/release/janus-plugin-worker
           test -x target/release/janus-web
-          ls -lh target/release/janus-runtime target/release/janus-web
-          file target/release/janus-runtime target/release/janus-web
+          ls -lh target/release/janus-runtime target/release/janus-plugin-worker target/release/janus-web
+          file target/release/janus-runtime target/release/janus-plugin-worker target/release/janus-web
