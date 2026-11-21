@@ -1,5 +1,6 @@
 //! One-request Lua worker. The parent supplies source/arguments over stdin
-//! and receives one JSON response over stdout. No host capabilities are inherited.
+//! and receives one JSON response over stdout. No Janus capability IPC is exposed;
+//! the worker still runs under the service account and is not a full OS sandbox.
 
 #[path = "../lua.rs"]
 mod lua;
@@ -123,6 +124,13 @@ fn apply_resource_limits() -> Result<()> {
     lower_limit(libc::RLIMIT_NOFILE, 16, "open file descriptors")?;
     lower_limit(libc::RLIMIT_FSIZE, 1024 * 1024, "file size")?;
     lower_limit(libc::RLIMIT_CORE, 0, "core dump")?;
+
+    let status = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    anyhow::ensure!(
+        status == 0,
+        "PR_SET_DUMPABLE failed: {}",
+        std::io::Error::last_os_error()
+    );
 
     let status = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
     anyhow::ensure!(
