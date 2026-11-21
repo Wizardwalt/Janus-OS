@@ -31,7 +31,7 @@ class AriaImportActivity : AppCompatActivity() {
             return
         }
         if (snapshotJson.toByteArray(Charsets.UTF_8).size > MAX_TRANSFER_BYTES) {
-            finishWithMessage("The OmniVault transfer exceeds Janus's 1 MiB limit.")
+            finishWithMessage("The OmniVault transfer exceeds Janus's 512 KiB limit.")
             return
         }
         val snapshot = runCatching { JSONObject(snapshotJson) }.getOrNull()
@@ -59,6 +59,10 @@ class AriaImportActivity : AppCompatActivity() {
             message.put("content", normalized.content)
         }
         val safeSnapshotJson = snapshot.toString()
+        if (safeSnapshotJson.toByteArray(Charsets.UTF_8).size > MAX_TRANSFER_BYTES) {
+            finishWithMessage("The normalized transfer exceeds Janus's 512 KiB limit.")
+            return
+        }
 
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val savedUrl = prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL).orEmpty()
@@ -87,7 +91,7 @@ class AriaImportActivity : AppCompatActivity() {
                 } else {
                     val normalizedServerUrl = parsed.toString().trimEnd('/')
                     prefs.edit().putString(KEY_SERVER_URL, normalizedServerUrl).apply()
-                    openRuntime(normalizedServerUrl, parsed, title, snapshotJson, conversationId)
+                    openRuntime(normalizedServerUrl, parsed, title, safeSnapshotJson, conversationId)
                 }
             }
             .setNegativeButton("Cancel") { _, _ -> finish() }
@@ -119,7 +123,7 @@ class AriaImportActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView, url: String) {
                 if (!injected && RuntimeUrlPolicy.sameOrigin(runtimeUri, url)) {
                     injected = true
-                    submitAfterLogin(view, title, safeSnapshotJson, conversationId)
+                    submitAfterLogin(view, title, snapshotJson, conversationId)
                 }
             }
         }
