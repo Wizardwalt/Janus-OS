@@ -1,13 +1,18 @@
 //! Plugin execution environment.
 
 use crate::plugin::PluginLoader;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use janus_core::Config;
 use sha2::{Digest, Sha256};
 use std::{
-    path::PathBuf,
-    sync::{atomic::{AtomicBool, Ordering}, Arc},
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::Arc,
     time::Duration,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
 };
 use tracing::debug;
 
@@ -40,25 +45,101 @@ fn validate_plugin_capabilities(requested: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Drop guard ensures a disconnected/cancelled API request signals its blocking worker.
-struct PluginCancellationGuard(Arc<AtomicBool>);
-
-impl Drop for PluginCancellationGuard {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Release);
-    }
-}
-
 /// Plugin executor managing Lua runtime and plugin lifecycle.
 pub struct PluginExecutor {
     config: Config,
     loader: PluginLoader,
-    /// Bounds aggregate in-process plugin concurrency; this is not OS isolation.
+    /// Bounds aggregate isolated worker-process concurrency.
     execution_slots: Arc<tokio::sync::Semaphore>,
 }
 
 const MAX_CONCURRENT_PLUGIN_EXECUTIONS: usize = 2;
 const MAX_PLUGIN_QUEUE_WAIT: Duration = Duration::from_secs(2);
+const MAX_PLUGIN_WALL_TIME: Duration = Duration::from_secs(5);
+const MAX_WORKER_REQUEST_BYTES: usize = 512 * 1024;
+const MAX_WORKER_RESPONSE_BYTES: usize = 300 * 1024;
+
+#[derive(serde::Serialize)]
+struct WorkerRequest {
+    code: String,
+    args: serde_json::Value,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum WorkerResponse {
+    Success { value: serde_json::Value },
+    Failure { error: String },
+}
+
+fn worker_executable_path_from(runtime_executable: &Path, configured: Option<PathBuf>) -> PathBuf {
+    configured.unwrap_or_else(|| {
+        let worker_name = if cfg!(windows) {
+            "janus-plugin-worker.exe"
+        } else {
+            "janus-plugin-worker"
+        };
+        runtime_executable
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(worker_name)
+    })
+}
+
+fn resolve_worker_executable() -> Result<PathBuf> {
+    let runtime_executable = std::env::current_exe()
+        .context("locating the Janus runtime executable")?;
+    let configured = std::env::var_os("JANUS_PLUGIN_WORKER_PATH").map(PathBuf::from);
+    let worker = worker_executable_path_from(&runtime_executable, configured);
+    anyhow::ensure!(
+        worker.is_file(),
+        "isolated plugin worker executable is missing at {}; install janus-plugin-worker beside janus-runtime or set JANUS_PLUGIN_WORKER_PATH",
+        worker.display()
+    );
+    Ok(worker)
+}
+
+struct WorkerProcessGuard {
+    child: Option<tokio::process::Child>,
+}
+
+impl WorkerProcessGuard {
+    fn new(child: tokio::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn child_mut(&mut self) -> &mut tokio::process::Child {
+        self.child.as_mut().expect("worker child is present until it is reaped")
+    }
+
+    fn disarm(&mut self) {
+        self.child.take();
+    }
+}
+
+impl Drop for WorkerProcessGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let _ = child.wait().await;
+                });
+            }
+        }
+    }
+}
+
+async fn stop_worker(worker: &mut WorkerProcessGuard) {
+    let waited = {
+        let child = worker.child_mut();
+        let _ = child.start_kill();
+        tokio::time::timeout(Duration::from_secs(1), child.wait()).await
+    };
+    if matches!(waited, Ok(Ok(_))) {
+        worker.disarm();
+    }
+}
 
 impl PluginExecutor {
     /// Create new plugin executor
@@ -103,7 +184,12 @@ impl PluginExecutor {
         Ok(format!("{:x}", Sha256::digest(plugin.code.as_bytes())))
     }
 
-    /// Execute plugin by name
+    /// Execute one plugin in a short-lived, resource-limited worker process.
+    ///
+    /// The worker receives only serialized source and arguments over private
+    /// stdin/stdout pipes. It has no host capability IPC; unsupported capability
+    /// requests are denied before the process is started. Dropping this future
+    /// drops the child handle, whose kill-on-drop policy terminates the worker.
     pub async fn execute(
         &self,
         plugin_name: &str,
@@ -112,16 +198,13 @@ impl PluginExecutor {
         // Plugin arguments can contain user data or secrets; never include them in logs.
         debug!(plugin_name, "Executing plugin");
 
-        let plugin = self.loader.get(plugin_name)
+        let plugin = self
+            .loader
+            .get(plugin_name)
             .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", plugin_name))?;
-        // Manifest declarations are requests, never grants. Until a capability
-        // has a vetted host implementation and an explicit grant path, deny it.
         validate_plugin_capabilities(&plugin.manifest.capabilities)?;
 
-        // Bound aggregate in-process execution so callers cannot create an
-        // unbounded number of CPU-bound blocking workers. A slot stays held until
-        // the worker actually exits, including after a timeout/cancellation signal.
-        let permit = tokio::time::timeout(
+        let _permit = tokio::time::timeout(
             MAX_PLUGIN_QUEUE_WAIT,
             Arc::clone(&self.execution_slots).acquire_owned(),
         )
@@ -129,42 +212,99 @@ impl PluginExecutor {
         .map_err(|_| anyhow::anyhow!("plugin execution capacity is busy; retry shortly"))?
         .map_err(|_| anyhow::anyhow!("plugin execution capacity is unavailable"))?;
 
-        // Lua execution is synchronous and CPU-bound. Keep it off Tokio's async
-        // worker threads and signal cooperative cancellation on timeout or request
-        // cancellation. This is still not an OS process/security boundary.
-        let code = plugin.code.clone();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let _cancellation_guard = PluginCancellationGuard(Arc::clone(&cancelled));
-        let worker_cancelled = Arc::clone(&cancelled);
-        let mut worker = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let sandbox = crate::lua::PluginSandbox::new()?;
-            sandbox.execute_with_cancellation(&code, args, worker_cancelled)
-        });
+        let request = WorkerRequest {
+            code: plugin.code.clone(),
+            args,
+        };
+        let request_bytes = serde_json::to_vec(&request)?;
+        anyhow::ensure!(
+            request_bytes.len() <= MAX_WORKER_REQUEST_BYTES,
+            "plugin worker request exceeds the 512 KiB limit"
+        );
 
-        const MAX_PLUGIN_WALL_TIME: Duration = Duration::from_secs(5);
-        match tokio::time::timeout(MAX_PLUGIN_WALL_TIME, &mut worker).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(error)) => Err(anyhow::anyhow!("plugin execution worker failed: {error}")),
+        let worker_path = resolve_worker_executable()?;
+        let mut command = Command::new(&worker_path);
+        command
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = command
+            .spawn()
+            .with_context(|| format!("starting isolated plugin worker at {}", worker_path.display()))?;
+        let mut child = WorkerProcessGuard::new(child);
+
+        let deadline = tokio::time::Instant::now() + MAX_PLUGIN_WALL_TIME;
+        let mut stdin = child
+            .child_mut()
+            .stdin
+            .take()
+            .context("isolated plugin worker stdin was unavailable")?;
+        let write_result = tokio::time::timeout_at(deadline, stdin.write_all(&request_bytes)).await;
+        if let Err(error) = match write_result {
+            Ok(result) => result,
             Err(_) => {
-                cancelled.store(true, Ordering::Release);
-                match tokio::time::timeout(Duration::from_secs(1), &mut worker).await {
-                    Ok(Ok(_)) => Err(anyhow::anyhow!(
-                        "plugin execution exceeded the 5-second wall-clock limit and was cooperatively cancelled"
-                    )),
-                    Ok(Err(error)) => Err(anyhow::anyhow!(
-                        "plugin execution exceeded the 5-second wall-clock limit; worker failed while stopping: {error}"
-                    )),
-                    Err(_) => {
-                        tracing::error!(
-                            plugin_name,
-                            "plugin worker did not stop after cooperative cancellation; OS-level isolation remains required"
-                        );
-                        Err(anyhow::anyhow!(
-                            "plugin execution exceeded the 5-second wall-clock limit; cooperative cancellation did not stop the worker within 1 second"
-                        ))
-                    }
-                }
+                stop_worker(&mut child).await;
+                anyhow::bail!("plugin worker did not accept its request within the 5-second wall-clock limit");
+            }
+        } {
+            stop_worker(&mut child).await;
+            return Err(error).context("sending plugin request to isolated worker");
+        }
+        drop(stdin);
+
+        let stdout = child
+            .child_mut()
+            .stdout
+            .take()
+            .context("isolated plugin worker stdout was unavailable")?;
+        let mut output = Vec::new();
+        let read_result = tokio::time::timeout_at(
+            deadline,
+            stdout
+                .take((MAX_WORKER_RESPONSE_BYTES + 1) as u64)
+                .read_to_end(&mut output),
+        )
+        .await;
+        match read_result {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                stop_worker(&mut child).await;
+                return Err(error).context("reading isolated plugin worker response");
+            }
+            Err(_) => {
+                stop_worker(&mut child).await;
+                anyhow::bail!("plugin exceeded the 5-second wall-clock limit; worker process terminated");
+            }
+        }
+
+        if output.len() > MAX_WORKER_RESPONSE_BYTES {
+            stop_worker(&mut child).await;
+            anyhow::bail!("plugin worker response exceeded the 300 KiB transport limit");
+        }
+
+        let status = match tokio::time::timeout_at(deadline + Duration::from_secs(1), child.child_mut().wait()).await {
+            Ok(Ok(status)) => {
+                child.disarm();
+                status
+            }
+            Ok(Err(error)) => return Err(error).context("waiting for isolated plugin worker"),
+            Err(_) => {
+                stop_worker(&mut child).await;
+                anyhow::bail!("plugin worker did not exit after closing its response pipe");
+            }
+        };
+
+        let response: WorkerResponse = serde_json::from_slice(&output)
+            .context("isolated plugin worker returned an invalid response")?;
+        match response {
+            WorkerResponse::Success { value } if status.success() => Ok(value),
+            WorkerResponse::Failure { error } => {
+                Err(anyhow::anyhow!("plugin execution failed: {error}"))
+            }
+            WorkerResponse::Success { .. } => {
+                Err(anyhow::anyhow!("plugin worker exited unsuccessfully: {status}"))
             }
         }
     }
@@ -196,6 +336,37 @@ mod tests {
         assert_eq!(slots.available_permits(), 2);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_worker_guard_kills_and_reaps_the_child_process() {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("exec sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = command.spawn().unwrap();
+        let pid = child.id().unwrap() as libc::pid_t;
+        drop(WorkerProcessGuard::new(child));
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let mut status = 0;
+                let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                if result == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("dropped worker should be killed and reaped");
+    }
+
     #[test]
     fn capability_policy_allows_only_safe_logging_or_no_capabilities() {
         assert!(validate_plugin_capabilities(&[]).is_ok());
@@ -205,13 +376,17 @@ mod tests {
         assert!(validate_plugin_capabilities(&["filesystem:read".to_string()]).is_err());
     }
     #[test]
-    fn cancellation_guard_signals_worker_when_request_is_dropped() {
-        let cancelled = Arc::new(AtomicBool::new(false));
-        {
-            let _guard = PluginCancellationGuard(Arc::clone(&cancelled));
-            assert!(!cancelled.load(Ordering::Acquire));
-        }
-        assert!(cancelled.load(Ordering::Acquire));
+    fn worker_path_override_takes_precedence_over_runtime_sibling() {
+        let runtime = Path::new("/opt/janus/bin/janus-runtime");
+        let configured = PathBuf::from("/custom/workers/janus-plugin-worker");
+        assert_eq!(
+            worker_executable_path_from(runtime, Some(configured.clone())),
+            configured
+        );
+        assert_eq!(
+            worker_executable_path_from(runtime, None),
+            PathBuf::from("/opt/janus/bin/janus-plugin-worker")
+        );
     }
 
 }

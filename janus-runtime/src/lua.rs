@@ -178,6 +178,7 @@ impl PluginSandbox {
             "collectgarbage",
             "pcall",
             "xpcall",
+            "print",
         ] {
             globals.set(name, LuaValue::Nil)?;
         }
@@ -532,4 +533,26 @@ mod tests {
         assert_eq!(result, serde_json::json!("nil"));
     }
 
+}
+
+
+#[cfg(test)]
+mod process_worker_surface_tests {
+    use super::*;
+
+    #[test]
+    fn plugin_sandbox_exposes_only_the_explicit_logging_host_function() {
+        let sandbox = PluginSandbox::new().unwrap();
+        let value = sandbox
+            .execute(
+                "return { print_type = type(print), os_type = type(os), io_type = type(io), package_type = type(package), log_type = type(janus.log) }",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        assert_eq!(value["print_type"], "nil");
+        assert_eq!(value["os_type"], "nil");
+        assert_eq!(value["io_type"], "nil");
+        assert_eq!(value["package_type"], "nil");
+        assert_eq!(value["log_type"], "function");
+    }
 }

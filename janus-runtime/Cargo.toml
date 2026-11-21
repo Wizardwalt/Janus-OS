@@ -35,4 +35,5 @@ reqwest.workspace = true
 serialport.workspace = true
 sha2.workspace = true
 machine-uid.workspace = true
+libc = "0.2"
 clap.workspace = true
