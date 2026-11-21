@@ -133,7 +133,7 @@ impl Drop for WorkerProcessGuard {
 async fn stop_worker(worker: &mut WorkerProcessGuard) {
     let waited = {
         let child = worker.child_mut();
-        let _ = child.kill().await;
+        let _ = child.start_kill();
         tokio::time::timeout(Duration::from_secs(1), child.wait()).await
     };
     if matches!(waited, Ok(Ok(_))) {
@@ -235,12 +235,20 @@ impl PluginExecutor {
             .with_context(|| format!("starting isolated plugin worker at {}", worker_path.display()))?;
         let mut child = WorkerProcessGuard::new(child);
 
+        let deadline = tokio::time::Instant::now() + MAX_PLUGIN_WALL_TIME;
         let mut stdin = child
             .child_mut()
             .stdin
             .take()
             .context("isolated plugin worker stdin was unavailable")?;
-        if let Err(error) = stdin.write_all(&request_bytes).await {
+        let write_result = tokio::time::timeout_at(deadline, stdin.write_all(&request_bytes)).await;
+        if let Err(error) = match write_result {
+            Ok(result) => result,
+            Err(_) => {
+                stop_worker(&mut child).await;
+                anyhow::bail!("plugin worker did not accept its request within the 5-second wall-clock limit");
+            }
+        } {
             stop_worker(&mut child).await;
             return Err(error).context("sending plugin request to isolated worker");
         }
@@ -252,8 +260,8 @@ impl PluginExecutor {
             .take()
             .context("isolated plugin worker stdout was unavailable")?;
         let mut output = Vec::new();
-        let read_result = tokio::time::timeout(
-            MAX_PLUGIN_WALL_TIME,
+        let read_result = tokio::time::timeout_at(
+            deadline,
             stdout
                 .take((MAX_WORKER_RESPONSE_BYTES + 1) as u64)
                 .read_to_end(&mut output),
@@ -276,7 +284,7 @@ impl PluginExecutor {
             anyhow::bail!("plugin worker response exceeded the 300 KiB transport limit");
         }
 
-        let status = match tokio::time::timeout(Duration::from_secs(1), child.child_mut().wait()).await {
+        let status = match tokio::time::timeout_at(deadline + Duration::from_secs(1), child.child_mut().wait()).await {
             Ok(Ok(status)) => {
                 child.disarm();
                 status

@@ -105,7 +105,7 @@ fn apply_resource_limits() -> Result<()> {
                 .with_context(|| format!("reading {name} resource limit"));
         }
         let current = unsafe { current.assume_init() };
-        let cap = desired.min(current.rlim_max);
+        let cap = desired.min(current.rlim_cur).min(current.rlim_max);
         let limit = libc::rlimit {
             rlim_cur: cap,
             rlim_max: cap,
