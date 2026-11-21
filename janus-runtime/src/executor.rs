@@ -1,7 +1,7 @@
 //! Plugin execution environment.
 
 use crate::plugin::PluginLoader;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use janus_core::Config;
 use sha2::{Digest, Sha256};
 use std::{
@@ -99,9 +99,46 @@ fn resolve_worker_executable() -> Result<PathBuf> {
     Ok(worker)
 }
 
-async fn stop_worker(child: &mut tokio::process::Child) {
-    let _ = child.kill().await;
-    let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
+struct WorkerProcessGuard {
+    child: Option<tokio::process::Child>,
+}
+
+impl WorkerProcessGuard {
+    fn new(child: tokio::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn child_mut(&mut self) -> &mut tokio::process::Child {
+        self.child.as_mut().expect("worker child is present until it is reaped")
+    }
+
+    fn disarm(&mut self) {
+        self.child.take();
+    }
+}
+
+impl Drop for WorkerProcessGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let _ = child.wait().await;
+                });
+            }
+        }
+    }
+}
+
+async fn stop_worker(worker: &mut WorkerProcessGuard) {
+    let waited = {
+        let child = worker.child_mut();
+        let _ = child.kill().await;
+        tokio::time::timeout(Duration::from_secs(1), child.wait()).await
+    };
+    if matches!(waited, Ok(Ok(_))) {
+        worker.disarm();
+    }
 }
 
 impl PluginExecutor {
@@ -193,11 +230,13 @@ impl PluginExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        let mut child = command
+        let child = command
             .spawn()
             .with_context(|| format!("starting isolated plugin worker at {}", worker_path.display()))?;
+        let mut child = WorkerProcessGuard::new(child);
 
         let mut stdin = child
+            .child_mut()
             .stdin
             .take()
             .context("isolated plugin worker stdin was unavailable")?;
@@ -208,6 +247,7 @@ impl PluginExecutor {
         drop(stdin);
 
         let stdout = child
+            .child_mut()
             .stdout
             .take()
             .context("isolated plugin worker stdout was unavailable")?;
@@ -236,8 +276,11 @@ impl PluginExecutor {
             anyhow::bail!("plugin worker response exceeded the 300 KiB transport limit");
         }
 
-        let status = match tokio::time::timeout(Duration::from_secs(1), child.wait()).await {
-            Ok(Ok(status)) => status,
+        let status = match tokio::time::timeout(Duration::from_secs(1), child.child_mut().wait()).await {
+            Ok(Ok(status)) => {
+                child.disarm();
+                status
+            }
             Ok(Err(error)) => return Err(error).context("waiting for isolated plugin worker"),
             Err(_) => {
                 stop_worker(&mut child).await;
@@ -283,6 +326,37 @@ mod tests {
         assert_eq!(slots.available_permits(), 1);
         drop(second);
         assert_eq!(slots.available_permits(), 2);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_worker_guard_kills_and_reaps_the_child_process() {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("exec sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = command.spawn().unwrap();
+        let pid = child.id().unwrap() as libc::pid_t;
+        drop(WorkerProcessGuard::new(child));
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let mut status = 0;
+                let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                if result == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("dropped worker should be killed and reaped");
     }
 
     #[test]

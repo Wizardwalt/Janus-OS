@@ -30,7 +30,7 @@ fn main() {
     let encoded = serde_json::to_vec(&response)
         .unwrap_or_else(|_| br#"{"status":"failure","error":"response encoding failed"}"#.to_vec());
     let mut stdout = std::io::stdout().lock();
-    if stdout.write_all(&encoded).is_err() {
+    if stdout.write_all(&encoded).is_err() || stdout.flush().is_err() {
         std::process::exit(2);
     }
     if !succeeded {
@@ -46,7 +46,8 @@ fn run_worker() -> WorkerResponse {
     }
 
     let mut input = Vec::new();
-    let read_result = std::io::stdin()
+    let stdin = std::io::stdin();
+    let read_result = stdin
         .lock()
         .take((MAX_REQUEST_BYTES + 1) as u64)
         .read_to_end(&mut input);
