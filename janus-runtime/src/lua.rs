@@ -515,4 +515,21 @@ mod tests {
         ).unwrap_err();
         assert!(error.to_string().contains("plugin execution cancelled"));
     }
+    #[test]
+    fn plugin_sandbox_does_not_inherit_startup_core_globals() {
+        let core = LuaEnv::new().unwrap();
+        core.execute_core_source(
+            "trusted-core",
+            "janus_private = 'must remain private to startup'",
+        )
+        .unwrap();
+
+        let plugin = PluginSandbox::new().unwrap();
+        let result = plugin
+            .execute("return type(janus_private)", serde_json::json!({}))
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!("nil"));
+    }
+
 }
