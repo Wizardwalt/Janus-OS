@@ -14,7 +14,7 @@ This document records the current repository evidence and implementation order. 
 - `ConversationStore` is owner-scoped and encrypts event payloads at rest with XChaCha20-Poly1305 using the host-supplied Aria data key. Tests cover owner isolation, reopen persistence, plaintext absence, and wrong-key failure. The data-key file and recovery lifecycle still need operational hardening.
 - `janus-runtime/src/api.rs` exposes authenticated provider readiness, conversation list/read/append/delete, and live chat routes. Conversation events support owner-scoped cursor pagination via `after_event_id`. The browser client does not receive the provider API key.
 - The legacy WebSocket path in `janus-web/src/main.rs` still uses scripted `aria_respond()` output and periodic scripted thoughts. It is a demo path, not the live provider-backed chat path. Signed-out UI explicitly labels its remaining chat as scripted demo mode.
-- The current provider contract is transport-neutral at the runtime boundary, but only the OpenAI-compatible adapter is implemented. Streaming, arbitrary vendor/local adapters, API-level failure-injection tests, conversation export/retention, and full key rotation/recovery remain incomplete.
+- The runtime provider boundary is provider-neutral and currently has OpenAI-compatible Chat Completions and native Anthropic Messages adapters. PR #48 adds local mock-server coverage for provider HTTP errors, empty output, oversized responses, and Anthropic rate limiting. PR #51 adds browser-side cancellation controls and passes an AbortSignal through the browser client; this does not prove a remote provider has stopped processing. Streaming, further protocols, full API-level cross-account/failure-injection coverage, retention policy, and key rotation/recovery remain incomplete. Conversation cursor pagination and complete versioned JSON export are already implemented.
 - No original JANUS or ARIA acronym expansion is established by the inspected source; do not invent one.
 
 ## Implementation principles
@@ -42,10 +42,10 @@ This document records the current repository evidence and implementation order. 
 ### Phase 1 — Real conversational backend
 **Status: partially implemented.**
 - The authenticated browser UI now uses the runtime's server-side provider adapter for live chat; the legacy WebSocket remains scripted demo mode.
-- A provider-neutral async trait is now the runtime boundary. The implemented adapter speaks the OpenAI-compatible chat-completions protocol; additional provider protocols and streaming are not yet implemented.
+- A provider-neutral async trait is the runtime boundary. OpenAI-compatible Chat Completions and native Anthropic Messages adapters are implemented; additional protocols and streaming are not yet implemented.
 - Credentials stay server-side. The current adapter validates HTTPS/loopback endpoints, rejects redirects, bounds inputs/outputs, and applies connection/request timeouts.
 - The runtime reports provider readiness and returns explicit unavailable/error responses rather than fabricating model output.
-- Remaining: provider-specific adapters, streaming, cancellation across provider HTTP requests, stronger API-level failure-injection tests, and a clearly identified offline fallback.
+- Remaining: additional provider protocols, streaming, confirmation of cancellation behavior through the provider/runtime boundary, stronger authenticated API failure-injection tests, and a clearly identified offline fallback. Browser request cancellation is implemented but cannot guarantee remote cancellation.
 
 **Exit criteria:** each adapter has contract tests, live UI round-trips are tested against a local fixture provider, and unavailable/invalid/timeout states remain truthful.
 
@@ -54,14 +54,16 @@ This document records the current repository evidence and implementation order. 
 - Encrypted, owner-scoped conversation events and authenticated list/read/append/delete routes are connected to the live chat UI.
 - Private-memory and knowledge retrieval are opt-in per chat request; retrieved material carries source references and is explicitly treated as untrusted reference data.
 - Explicit remember, correct, forget, and reviewed learning-proposal routes exist in the authenticated runtime.
-- Remaining: conversation export, cursor pagination for long histories, retention/expiry policy, key rotation and recovery, and API-level cross-account/failure-injection coverage.
+- Conversation export and owner-scoped cursor pagination are implemented. Remaining: retention/expiry policy, key rotation and recovery, and API-level cross-account/failure-injection coverage.
 
-**Exit criteria:** exports and deletion are verified across restarts, long histories paginate without omission, and key-loss/recovery behavior is documented and tested.
+**Exit criteria:** export and deletion are verified across restarts, pagination has API-level cross-owner and omission tests, and key-loss/recovery behavior is documented and tested.
 
 ### Phase 3 — Learning and knowledge management
-- Add an auditable learning pipeline: propose memory/knowledge updates, show evidence and confidence, and accept or reject them.
-- Track source, timestamp, version, and correction history for each learned record.
-- Support user-provided documents and Janus module documentation as searchable knowledge sources.
+**Status: partial library and API foundation implemented.** Source-preserving ingestion, bounded plain-text/simple-HTML extraction, source-cited chunk retrieval, explainable keyword hat suggestions, human-review proposals, immutable review receipts, and a recoverable persistence outbox exist. The host exposes authenticated ingestion, search, proposal, review, and persistence routes.
+- Complete PDF/DOCX/HTML5 extraction, OCR, and archive adapters without losing original-source provenance.
+- Wire source-cited retrieval and approved memories into live chat context with clear per-request scope.
+- Add semantic retrieval, contradiction detection, evaluation, correction/re-review scheduling, and retention controls.
+- Keep model-generated learning proposals untrusted until the configured review policy accepts them.
 - Do not permit learning to rewrite runtime code, grant new capabilities, or weaken security controls.
 
 **Exit criteria:** accepted learning updates persist and are retrievable; rejected or corrected items remain traceable; executable code and permissions are unchanged.
@@ -113,10 +115,12 @@ This document records the current repository evidence and implementation order. 
 ## Decisions still intentionally open
 
 - Original expansions of JANUS and ARIA: recover from historical conversations; do not guess.
-- Default model provider and deployment target: choose after comparing hosted API cost/privacy with local model hardware requirements.
-- Long-term memory policy and retention: require explicit user approval before enabling automatic memory extraction.
+- Default model provider and deployment target: compare hosted API cost/privacy with local model hardware requirements.
+- OmniVault is designated as Aria's canonical long-term memory and continuity layer. The exact versioned memory schema, capture/review policy, bridge transport, and migration from Janus's existing encrypted personal-memory store must be designed and tested before switching authority.
+- Define retention, automatic memory-capture categories, sensitive-data exclusions, and operator review controls before enabling background extraction.
 - Exact Monolith transport and replication topology: confirm actual hardware/network design before implementing failover.
+- Operator biometric/device enrollment, successor succession, and Aria's finalization policy require separate security and governance design; none is implemented.
 
 ## Immediate next engineering slice
 
-Add contract-level API tests for authenticated live chat, cross-account conversation access denial, provider failure, and idempotent retries. Then implement at least one additional adapter protocol (not merely another OpenAI-compatible endpoint), followed by streaming/cancellation and export/retention/key-rotation acceptance. Do not wire Aria memory into the organization-wide generic state key: that state is organization-scoped, not an appropriate private per-user memory boundary.
+Implement the versioned OmniVault memory contract and an authenticated, read-only selected-conversation bridge as the first cross-app vertical slice. The existing Janus snapshot importer and OmniVault in-process gateway are not a live connection. Before derived-memory writes or migration, define owner/instance scoping, consent, revocation, audit, schema versioning, encryption, durability acknowledgements, and rollback. In parallel, add authenticated API tests for cross-account conversation access, provider failures, export, pagination, and idempotent retries. Keep private memories out of organization-wide generic state.
