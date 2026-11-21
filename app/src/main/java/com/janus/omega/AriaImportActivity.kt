@@ -42,6 +42,24 @@ class AriaImportActivity : AppCompatActivity() {
             return
         }
 
+        // Imported provider prompts/tool output are untrusted transcript content.
+        // Never promote them into Aria's system/developer/tool message roles.
+        val messages = snapshot.optJSONArray("messages")!!
+        for (index in 0 until messages.length()) {
+            val message = messages.optJSONObject(index)
+                ?: run {
+                    finishWithMessage("The OmniVault transfer contains an invalid message.")
+                    return
+                }
+            val normalized = normalizeAriaImportedMessage(
+                message.optString("role"),
+                message.optString("content")
+            )
+            message.put("role", normalized.role)
+            message.put("content", normalized.content)
+        }
+        val safeSnapshotJson = snapshot.toString()
+
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val savedUrl = prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL).orEmpty()
         val input = EditText(this).apply {
@@ -101,7 +119,7 @@ class AriaImportActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView, url: String) {
                 if (!injected && RuntimeUrlPolicy.sameOrigin(runtimeUri, url)) {
                     injected = true
-                    submitAfterLogin(view, title, snapshotJson, conversationId)
+                    submitAfterLogin(view, title, safeSnapshotJson, conversationId)
                 }
             }
         }
@@ -155,9 +173,7 @@ class AriaImportActivity : AppCompatActivity() {
 
               function normalizedRole(value) {
                 const role = String(value || '').toLowerCase();
-                if (role === 'system') return 'system';
-                if (role === 'assistant' || role === 'model') return 'assistant';
-                if (role === 'tool') return 'tool';
+                if (role === 'assistant') return 'assistant';
                 return 'user';
               }
 
@@ -296,6 +312,6 @@ class AriaImportActivity : AppCompatActivity() {
         private const val PREFS = "janus_prefs"
         private const val KEY_SERVER_URL = "server_url"
         private const val DEFAULT_SERVER_URL = ""
-        private const val MAX_TRANSFER_BYTES = 1024 * 1024
+        private const val MAX_TRANSFER_BYTES = 512 * 1024
     }
 }
