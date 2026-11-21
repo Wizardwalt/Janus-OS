@@ -126,7 +126,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
-        private const val MAX_TRANSFER_BYTES = 1024 * 1024
+        private const val MAX_TRANSFER_BYTES = 512 * 1024
         private const val MAX_IMPORTED_MESSAGES = 1000
     }
 }
