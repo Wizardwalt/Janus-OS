@@ -97,7 +97,7 @@ fn run_worker() -> WorkerResponse {
 /// filesystem, network, seccomp, or separate-UID sandbox.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn apply_resource_limits() -> Result<()> {
-    fn lower_limit(resource: libc::c_int, desired: libc::rlim_t, name: &str) -> Result<()> {
+    fn lower_limit(resource: libc::__rlimit_resource_t, desired: libc::rlim_t, name: &str) -> Result<()> {
         let mut current = std::mem::MaybeUninit::<libc::rlimit>::uninit();
         let read_status = unsafe { libc::getrlimit(resource, current.as_mut_ptr()) };
         if read_status != 0 {
