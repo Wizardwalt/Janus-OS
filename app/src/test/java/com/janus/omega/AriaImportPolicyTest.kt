@@ -33,7 +33,7 @@ class AriaImportPolicyTest {
     @Test
     fun unknownRolesCannotBecomePrivilegedConversationRoles() {
         assertEquals(
-            NormalizedAriaImportMessage("user", "[Imported source role: custom]\\nOpaque output"),
+            NormalizedAriaImportMessage("user", "[Imported source role: custom]\nOpaque output"),
             normalizeAriaImportedMessage("custom", "Opaque output")
         )
     }
