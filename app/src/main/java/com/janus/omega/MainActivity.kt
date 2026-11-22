@@ -76,7 +76,7 @@ class MainActivity : AppCompatActivity() {
                     if (count < 0) break
                     total += count
                     require(total <= MAX_TRANSFER_BYTES) {
-                        "The selected conversation exceeds Janus's 1 MiB import limit."
+                        "The selected conversation exceeds Janus's 512 KiB import limit."
                     }
                     output.write(buffer, 0, count)
                 }
@@ -101,7 +101,7 @@ class MainActivity : AppCompatActivity() {
             }
             val transferJson = snapshot.toString()
             require(transferJson.toByteArray(Charsets.UTF_8).size <= MAX_TRANSFER_BYTES) {
-                "The selected conversation exceeds the 1 MiB runtime import limit."
+                "The selected conversation exceeds the 512 KiB runtime import limit."
             }
             // Hash the entire normalized snapshot, not just provider/id: fallback
             // IDs such as "import-1" can legitimately repeat across source archives.
