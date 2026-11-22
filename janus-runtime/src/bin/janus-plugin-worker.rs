@@ -93,9 +93,76 @@ fn run_worker() -> WorkerResponse {
     }
 }
 
-/// Linux/Android process limits are applied before any plugin source is parsed
-/// or executed. This is process/resource isolation, not a complete namespace,
-/// filesystem, network, seccomp, or separate-UID sandbox.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn install_worker_seccomp_filter() -> Result<()> {
+    #[repr(C)]
+    struct SockFilter { code: u16, jt: u8, jf: u8, k: u32 }
+    #[repr(C)]
+    struct SockFprog { len: u16, filter: *mut SockFilter }
+
+    // AUDIT_ARCH values from linux/audit.h. Unknown architectures fail closed.
+    #[cfg(target_arch = "x86_64")]
+    let audit_arch = 0xc000_003e_u32;
+    #[cfg(target_arch = "aarch64")]
+    let audit_arch = 0xc000_00b7_u32;
+    #[cfg(target_arch = "x86")]
+    let audit_arch = 0x4000_0003_u32;
+    #[cfg(target_arch = "arm")]
+    let audit_arch = 0x4000_0028_u32;
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "x86", target_arch = "arm")))]
+    anyhow::bail!("seccomp worker policy is not defined for this CPU architecture");
+
+    const BPF_LD_W_ABS: u16 = 0x20;
+    const BPF_JMP_JEQ_K: u16 = 0x15;
+    const BPF_RET_K: u16 = 0x06;
+    const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
+    const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+    const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+
+    let denied_syscalls: [libc::c_long; 15] = [
+        libc::SYS_socket, libc::SYS_socketpair, libc::SYS_connect,
+        libc::SYS_accept, libc::SYS_accept4, libc::SYS_bind,
+        libc::SYS_listen, libc::SYS_sendto, libc::SYS_recvfrom,
+        libc::SYS_sendmsg, libc::SYS_recvmsg, libc::SYS_shutdown,
+        libc::SYS_execve, libc::SYS_execveat, libc::SYS_ptrace,
+    ];
+
+    // Validate seccomp_data.arch before syscall numbers; ABI mismatches are killed.
+    let mut filter = Vec::with_capacity(5 + denied_syscalls.len() * 2);
+    filter.push(SockFilter { code: BPF_LD_W_ABS, jt: 0, jf: 0, k: 4 });
+    filter.push(SockFilter { code: BPF_JMP_JEQ_K, jt: 1, jf: 0, k: audit_arch });
+    filter.push(SockFilter { code: BPF_RET_K, jt: 0, jf: 0, k: SECCOMP_RET_KILL_PROCESS });
+    filter.push(SockFilter { code: BPF_LD_W_ABS, jt: 0, jf: 0, k: 0 });
+    for syscall in denied_syscalls {
+        filter.push(SockFilter { code: BPF_JMP_JEQ_K, jt: 0, jf: 1, k: syscall as u32 });
+        filter.push(SockFilter {
+            code: BPF_RET_K, jt: 0, jf: 0,
+            k: SECCOMP_RET_ERRNO | libc::EPERM as u32,
+        });
+    }
+    filter.push(SockFilter { code: BPF_RET_K, jt: 0, jf: 0, k: SECCOMP_RET_ALLOW });
+
+    anyhow::ensure!(filter.len() <= u16::MAX as usize, "seccomp filter is too large");
+    let program = SockFprog { len: filter.len() as u16, filter: filter.as_mut_ptr() };
+    // PR_SET_SECCOMP = 22; SECCOMP_MODE_FILTER = 2.
+    let status = unsafe { libc::prctl(22, 2, &program as *const SockFprog as libc::c_ulong, 0, 0) };
+    anyhow::ensure!(
+        status == 0,
+        "installing worker seccomp filter failed: {}",
+        std::io::Error::last_os_error()
+    );
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn install_worker_seccomp_filter() -> Result<()> {
+    anyhow::bail!("seccomp worker policy is supported only on Linux and Android")
+}
+
+/// Linux/Android resource limits and a narrow seccomp deny-list are applied
+/// before plugin source is parsed or executed. Network socket creation/use,
+/// process execution, and ptrace are denied. File access is not yet isolated,
+/// and this is not a complete namespace, filesystem, or separate-UID sandbox.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn apply_resource_limits() -> Result<()> {
     fn lower_limit(resource: libc::__rlimit_resource_t, desired: libc::rlim_t, name: &str) -> Result<()> {
@@ -138,10 +205,54 @@ fn apply_resource_limits() -> Result<()> {
         "PR_SET_NO_NEW_PRIVS failed: {}",
         std::io::Error::last_os_error()
     );
+    install_worker_seccomp_filter()?;
     Ok(())
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn apply_resource_limits() -> Result<()> {
     anyhow::bail!("OS-limited plugin workers are supported only on Linux and Android; execution denied")
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    const SECCOMP_CHILD_ENV: &str = "JANUS_SECCOMP_PROBE_CHILD";
+
+    #[test]
+    fn seccomp_probe_child() {
+        if std::env::var_os(SECCOMP_CHILD_ENV).is_none() { return; }
+        apply_resource_limits().expect("worker resource and seccomp policy must install");
+        unsafe {
+            let socket = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            assert_eq!(socket, -1, "socket creation must be denied");
+            assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+
+            let path = std::ffi::CString::new("/bin/true").unwrap();
+            let argv = [path.as_ptr(), std::ptr::null()];
+            let envp = [std::ptr::null()];
+            let exec_status = libc::execve(path.as_ptr(), argv.as_ptr(), envp.as_ptr());
+            assert_eq!(exec_status, -1, "process execution must be denied");
+            assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+        }
+    }
+
+    #[test]
+    fn worker_seccomp_denies_socket_and_exec_syscalls() {
+        let executable = std::env::current_exe().expect("test executable path");
+        let output = Command::new(executable)
+            .args(["--exact", "tests::seccomp_probe_child", "--nocapture"])
+            .env(SECCOMP_CHILD_ENV, "1")
+            .output()
+            .expect("launch isolated seccomp probe process");
+        assert!(
+            output.status.success(),
+            "seccomp probe failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
