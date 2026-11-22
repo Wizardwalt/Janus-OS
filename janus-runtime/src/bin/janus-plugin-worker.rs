@@ -119,13 +119,26 @@ fn install_worker_seccomp_filter() -> Result<()> {
     const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
     const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 
-    let denied_syscalls: [libc::c_long; 15] = [
-        libc::SYS_socket, libc::SYS_socketpair, libc::SYS_connect,
-        libc::SYS_accept, libc::SYS_accept4, libc::SYS_bind,
-        libc::SYS_listen, libc::SYS_sendto, libc::SYS_recvfrom,
-        libc::SYS_sendmsg, libc::SYS_recvmsg, libc::SYS_shutdown,
-        libc::SYS_execve, libc::SYS_execveat, libc::SYS_ptrace,
+    let mut denied_syscalls = vec![
+        libc::SYS_socket,
+        libc::SYS_socketpair,
+        libc::SYS_connect,
+        libc::SYS_accept,
+        libc::SYS_accept4,
+        libc::SYS_bind,
+        libc::SYS_listen,
+        libc::SYS_sendto,
+        libc::SYS_recvfrom,
+        libc::SYS_sendmsg,
+        libc::SYS_recvmsg,
+        libc::SYS_shutdown,
+        libc::SYS_execve,
+        libc::SYS_execveat,
+        libc::SYS_ptrace,
     ];
+    // 32-bit Linux uses the multiplexed socketcall syscall for legacy networking.
+    #[cfg(any(target_arch = "x86", target_arch = "arm"))]
+    denied_syscalls.push(libc::SYS_socketcall);
 
     // Validate seccomp_data.arch before syscall numbers; ABI mismatches are killed.
     let mut filter = Vec::with_capacity(5 + denied_syscalls.len() * 2);
