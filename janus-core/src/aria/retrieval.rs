@@ -107,7 +107,8 @@ pub fn search_all(
 mod tests {
     use super::*;
     use crate::aria::{
-        EpistemicStatus, Hat, KnowledgeContentType, TextArtifactInput,
+        EncryptedMemoryStore, EpistemicStatus, Hat, KnowledgeContentType, PersonalMemory,
+        TextArtifactInput,
     };
 
     #[test]
@@ -248,4 +249,80 @@ mod tests {
         assert!(hits.iter().any(|h|matches!(h,UnifiedSearchHit::Personal(m) if m.owner_id=="alice")));
         assert!(!hits.iter().any(|h|matches!(h,UnifiedSearchHit::Personal(m) if m.owner_id=="bob")));
     }
+
+    #[test]
+    fn unified_search_uses_encrypted_owner_scoped_memory_and_preserves_evidence_refs() {
+        let knowledge = KnowledgeStore::in_memory().unwrap();
+        let artifacts = AriaIngestionStore::in_memory().unwrap();
+        let key = [11u8; 32];
+        let mut personal = EncryptedMemoryStore::in_memory(&key).unwrap();
+        let now = Utc::now();
+
+        personal.remember(&PersonalMemory {
+            memory_id: "alice-bmx".into(),
+            owner_id: "alice".into(),
+            content: "BMX brake setup and cable adjustment.".into(),
+            source_refs: vec!["omnivault:owner-1:conversation-42".into()],
+            created_at: now,
+            updated_at: now,
+            expires_at: None,
+            version: 1,
+        }).unwrap();
+        personal.remember(&PersonalMemory {
+            memory_id: "bob-bmx".into(),
+            owner_id: "bob".into(),
+            content: "BMX brake setup from another owner's archive.".into(),
+            source_refs: vec!["omnivault:owner-2:conversation-99".into()],
+            created_at: now,
+            updated_at: now,
+            expires_at: None,
+            version: 1,
+        }).unwrap();
+
+        let hits = search_all(
+            &knowledge,
+            &artifacts,
+            Some(&personal),
+            "BMX brake",
+            "alice",
+            &KnowledgeAccessScope::public_internal(),
+            &IngestionAccessScope::public_internal(),
+            now,
+            10,
+        ).unwrap();
+        let memories: Vec<_> = hits.iter().filter_map(|hit| match hit {
+            UnifiedSearchHit::Personal(memory) => Some(memory),
+            _ => None,
+        }).collect();
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].owner_id, "alice");
+        assert_eq!(
+            memories[0].source_refs,
+            vec!["omnivault:owner-1:conversation-42"]
+        );
+
+        // Evidence identifiers are searchable without exposing another owner's memory.
+        let evidence_hits = search_all(
+            &knowledge,
+            &artifacts,
+            Some(&personal),
+            "omnivault:owner-1:conversation-42",
+            "alice",
+            &KnowledgeAccessScope::public_internal(),
+            &IngestionAccessScope::public_internal(),
+            now,
+            10,
+        ).unwrap();
+        assert!(evidence_hits.iter().any(|hit| matches!(
+            hit,
+            UnifiedSearchHit::Personal(memory)
+                if memory.memory_id == "alice-bmx"
+                    && memory.source_refs.contains(&"omnivault:owner-1:conversation-42".to_owned())
+        )));
+        assert!(!evidence_hits.iter().any(|hit| matches!(
+            hit,
+            UnifiedSearchHit::Personal(memory) if memory.owner_id == "bob"
+        )));
+    }
+
 }
