@@ -11,6 +11,10 @@ description = "Janus core runtime daemon: plugin execution, API server, state ma
 name = "janus-runtime"
 path = "src/main.rs"
 
+[features]
+default = ["runtime-server"]
+runtime-server = ["dep:reqwest"]
+
 [dependencies]
 janus-core = { path = "../janus-core" }
 tokio.workspace = true
@@ -31,7 +35,7 @@ ed25519-dalek.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, optional = true }
 serialport.workspace = true
 sha2.workspace = true
 machine-uid.workspace = true
