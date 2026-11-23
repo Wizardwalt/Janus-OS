@@ -49,7 +49,8 @@ jobs:
       - name: Install Android NDK
         uses: android-actions/setup-android@v3
         with:
-          ndk-version: 27.2.12479018
+          packages: ndk;27.2.12479018
+          accept-android-sdk-licenses: true
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
