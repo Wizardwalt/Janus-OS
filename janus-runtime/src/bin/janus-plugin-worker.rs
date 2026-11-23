@@ -119,6 +119,7 @@ fn install_worker_seccomp_filter() -> Result<()> {
     const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
     const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 
+    #[allow(unused_mut)]
     let mut denied_syscalls = vec![
         libc::SYS_socket,
         libc::SYS_socketpair,
@@ -186,9 +187,9 @@ fn install_worker_seccomp_filter() -> Result<()> {
 /// and this is not a complete namespace, filesystem, or separate-UID sandbox.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn apply_resource_limits() -> Result<()> {
-    fn lower_limit(resource: libc::__rlimit_resource_t, desired: libc::rlim_t, name: &str) -> Result<()> {
+    fn lower_limit(resource: libc::c_int, desired: libc::rlim_t, name: &str) -> Result<()> {
         let mut current = std::mem::MaybeUninit::<libc::rlimit>::uninit();
-        let read_status = unsafe { libc::getrlimit(resource, current.as_mut_ptr()) };
+        let read_status = unsafe { libc::getrlimit(resource as _, current.as_mut_ptr()) };
         if read_status != 0 {
             return Err(std::io::Error::last_os_error())
                 .with_context(|| format!("reading {name} resource limit"));
@@ -199,7 +200,7 @@ fn apply_resource_limits() -> Result<()> {
             rlim_cur: cap,
             rlim_max: cap,
         };
-        let write_status = unsafe { libc::setrlimit(resource, &limit) };
+        let write_status = unsafe { libc::setrlimit(resource as _, &limit) };
         if write_status != 0 {
             return Err(std::io::Error::last_os_error())
                 .with_context(|| format!("setting {name} resource limit"));
@@ -207,11 +208,11 @@ fn apply_resource_limits() -> Result<()> {
         Ok(())
     }
 
-    lower_limit(libc::RLIMIT_CPU, 6, "CPU time")?;
-    lower_limit(libc::RLIMIT_AS, 512 * 1024 * 1024, "address space")?;
-    lower_limit(libc::RLIMIT_NOFILE, 16, "open file descriptors")?;
-    lower_limit(libc::RLIMIT_FSIZE, 1024 * 1024, "file size")?;
-    lower_limit(libc::RLIMIT_CORE, 0, "core dump")?;
+    lower_limit(libc::RLIMIT_CPU as libc::c_int, 6, "CPU time")?;
+    lower_limit(libc::RLIMIT_AS as libc::c_int, 512 * 1024 * 1024, "address space")?;
+    lower_limit(libc::RLIMIT_NOFILE as libc::c_int, 16, "open file descriptors")?;
+    lower_limit(libc::RLIMIT_FSIZE as libc::c_int, 1024 * 1024, "file size")?;
+    lower_limit(libc::RLIMIT_CORE as libc::c_int, 0, "core dump")?;
 
     let status = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
     anyhow::ensure!(
