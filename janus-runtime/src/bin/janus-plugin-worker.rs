@@ -265,8 +265,8 @@ mod tests {
             let ptrace_status = libc::ptrace(
                 libc::PTRACE_TRACEME,
                 0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                std::ptr::null_mut::<libc::c_void>(),
+                std::ptr::null_mut::<libc::c_void>(),
             );
             assert_eq!(ptrace_status, -1, "ptrace must be denied");
             assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
