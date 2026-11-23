@@ -322,4 +322,42 @@ mod tests {
     }
 
 
+
+    #[test]
+    fn encrypted_memory_rejects_tampered_ciphertext_during_read_and_search() {
+        let key = [13u8; 32];
+        let mut store = EncryptedMemoryStore::in_memory(&key).unwrap();
+        let item = sample("tampered-memory", "alice");
+        store.remember(&item).unwrap();
+
+        let mut ciphertext: Vec<u8> = store.connection.query_row(
+            "SELECT ciphertext FROM aria_personal_memories_encrypted WHERE memory_id = ?1",
+            [&item.memory_id],
+            |row| row.get(0),
+        ).unwrap();
+        ciphertext[0] ^= 0x80;
+        store.connection.execute(
+            "UPDATE aria_personal_memories_encrypted SET ciphertext = ?1 WHERE memory_id = ?2",
+            params![ciphertext, item.memory_id],
+        ).unwrap();
+
+        assert!(store.get("alice", "tampered-memory", Utc::now()).is_err());
+        assert!(store.search("alice", "bicycle", Utc::now(), 10).is_err());
+    }
+
+    #[test]
+    fn encrypted_memory_cannot_be_reassigned_by_tampering_with_owner_index() {
+        let key = [17u8; 32];
+        let mut store = EncryptedMemoryStore::in_memory(&key).unwrap();
+        store.remember(&sample("owner-bound-memory", "alice")).unwrap();
+
+        store.connection.execute(
+            "UPDATE aria_personal_memories_encrypted SET owner_id = 'bob' WHERE memory_id = 'owner-bound-memory'",
+            [],
+        ).unwrap();
+
+        assert!(store.get("bob", "owner-bound-memory", Utc::now()).is_err());
+        assert!(store.list("bob", Utc::now(), 10).is_err());
+    }
+
 }
