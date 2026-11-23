@@ -135,7 +135,15 @@ fn install_worker_seccomp_filter() -> Result<()> {
         libc::SYS_execve,
         libc::SYS_execveat,
         libc::SYS_ptrace,
+        libc::SYS_clone,
+        435, // clone3 is syscall 435 on the supported Linux ABIs.
     ];
+    // fork/vfork have dedicated syscall numbers on x86; ARM ABIs implement
+    // them through clone, which is denied above.
+    #[cfg(target_arch = "x86_64")]
+    denied_syscalls.extend([57, 58]);
+    #[cfg(target_arch = "x86")]
+    denied_syscalls.extend([2, 190]);
     // Legacy 32-bit x86 uses socketcall; ARM EABI exposes direct socket syscalls.
     #[cfg(target_arch = "x86")]
     denied_syscalls.push(libc::SYS_socketcall);
@@ -174,7 +182,7 @@ fn install_worker_seccomp_filter() -> Result<()> {
 
 /// Linux/Android resource limits and a narrow seccomp deny-list are applied
 /// before plugin source is parsed or executed. Network socket creation/use,
-/// process execution, and ptrace are denied. File access is not yet isolated,
+/// process creation/execution, and ptrace are denied. File access is not yet isolated,
 /// and this is not a complete namespace, filesystem, or separate-UID sandbox.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn apply_resource_limits() -> Result<()> {
@@ -262,6 +270,24 @@ mod tests {
             assert_eq!(execveat_status, -1, "execveat must be denied");
             assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
 
+            let fork_status = libc::fork();
+            assert_eq!(fork_status, -1, "process creation through fork must be denied");
+            assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+
+            let clone3_status = libc::syscall(
+                435,
+                std::ptr::null::<libc::c_void>(),
+                0,
+            );
+            assert_eq!(clone3_status, -1, "clone3 must be denied or unavailable");
+            assert!(
+                matches!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::EPERM) | Some(libc::ENOSYS)
+                ),
+                "clone3 must not be allowed when the kernel implements it"
+            );
+
             let ptrace_status = libc::ptrace(
                 libc::PTRACE_TRACEME,
                 0,
@@ -274,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_seccomp_denies_socket_and_exec_syscalls() {
+    fn worker_seccomp_denies_socket_exec_and_process_creation() {
         let executable = std::env::current_exe().expect("test executable path");
         let output = Command::new(executable)
             .args(["--exact", "tests::seccomp_probe_child", "--nocapture"])
