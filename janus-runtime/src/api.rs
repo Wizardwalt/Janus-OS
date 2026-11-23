@@ -676,8 +676,43 @@ async fn aria_chat(
             return aria_conversation_store_unavailable();
         };
 
-        // If the client retries after a lost response, return the already saved
-        // assistant event rather than asking the provider to generate twice.
+        // Validate the idempotency key against the original user message before
+        // returning a saved assistant response. Otherwise a caller could reuse a
+        // completed request ID with different content and receive the old answer.
+        match conversations.get_event(&account.id, &request.conversation_id, &user_event_id) {
+            Ok(Some(saved)) if saved.role == "user" && saved.content == request.message => {}
+            Ok(Some(_)) => return (StatusCode::CONFLICT, Json(ApiResponse {
+                status: "error".into(), data: None,
+                error: Some("chat request ID was already used with different content".into()),
+            })),
+            Ok(None) => {
+                // An assistant event without its matching user event is inconsistent;
+                // do not append a new message or call the provider for that key.
+                match conversations.get_event(&account.id, &request.conversation_id, &assistant_event_id) {
+                    Ok(None) => {}
+                    Ok(Some(_)) => return (StatusCode::CONFLICT, Json(ApiResponse {
+                        status: "error".into(), data: None,
+                        error: Some("chat request ID has no matching saved user event".into()),
+                    })),
+                    Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+                        status: "error".into(), data: None, error: Some(error.to_string()),
+                    })),
+                }
+                if let Err(error) = conversations.append_event(
+                    &account.id, &request.conversation_id, &user_event,
+                ) {
+                    return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+                        status: "error".into(), data: None, error: Some(error.to_string()),
+                    }));
+                }
+            }
+            Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+                status: "error".into(), data: None, error: Some(error.to_string()),
+            })),
+        }
+
+        // A matching saved user event plus a saved assistant event is a completed
+        // turn. Return it without contacting the provider a second time.
         match conversations.get_event(&account.id, &request.conversation_id, &assistant_event_id) {
             Ok(Some(saved)) if saved.role == "assistant" => {
                 return (StatusCode::OK, Json(ApiResponse {
@@ -698,26 +733,6 @@ async fn aria_chat(
                 error: Some("chat request ID is already used by a non-assistant event".into()),
             })),
             Ok(None) => {}
-            Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
-                status: "error".into(), data: None, error: Some(error.to_string()),
-            })),
-        }
-
-        match conversations.get_event(&account.id, &request.conversation_id, &user_event_id) {
-            Ok(Some(saved)) if saved.role == "user" && saved.content == request.message => {}
-            Ok(Some(_)) => return (StatusCode::CONFLICT, Json(ApiResponse {
-                status: "error".into(), data: None,
-                error: Some("chat request ID was already used with different content".into()),
-            })),
-            Ok(None) => {
-                if let Err(error) = conversations.append_event(
-                    &account.id, &request.conversation_id, &user_event,
-                ) {
-                    return (StatusCode::BAD_REQUEST, Json(ApiResponse {
-                        status: "error".into(), data: None, error: Some(error.to_string()),
-                    }));
-                }
-            }
             Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
                 status: "error".into(), data: None, error: Some(error.to_string()),
             })),
