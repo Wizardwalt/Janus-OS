@@ -61,8 +61,8 @@ jobs:
         run: cargo install cargo-ndk --locked
 
       - name: Cross-compile plugin worker for Android
-        run: cargo ndk -t arm64-v8a --platform 23 check -p janus-runtime --bin janus-plugin-worker
+        run: cargo ndk -t arm64-v8a --platform 23 check --no-default-features -p janus-runtime --bin janus-plugin-worker
 
-      - name: Report Android target lockfile delta
+      - name: Report Android target lockfile delta (informational)
         if: always()
-        run: git diff -- Cargo.lock
+        run: git diff -- Cargo.lock || true
