@@ -22,6 +22,9 @@ PY
 
 PORT="$(free_port)"
 PROVIDER_PORT="$(free_port)"
+while [[ "$PROVIDER_PORT" == "$PORT" ]]; do
+  PROVIDER_PORT="$(free_port)"
+done
 BASE="http://127.0.0.1:$PORT"
 PROVIDER_BASE="http://127.0.0.1:$PROVIDER_PORT"
 TMP_DIR="$(mktemp -d)"

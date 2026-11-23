@@ -42,7 +42,7 @@ jobs:
             ubuntu-latest-cargo-
 
       - name: Build Janus runtime
-        run: cargo build --locked --release --bin janus-runtime
+        run: cargo build --release --bin janus-runtime
 
       - name: Exercise provider failure, retry, and idempotency
         run: bash scripts/test-aria-chat-idempotency.sh
