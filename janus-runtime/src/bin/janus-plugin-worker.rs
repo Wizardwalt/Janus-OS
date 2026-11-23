@@ -136,8 +136,8 @@ fn install_worker_seccomp_filter() -> Result<()> {
         libc::SYS_execveat,
         libc::SYS_ptrace,
     ];
-    // 32-bit Linux uses the multiplexed socketcall syscall for legacy networking.
-    #[cfg(any(target_arch = "x86", target_arch = "arm"))]
+    // Legacy 32-bit x86 uses socketcall; ARM EABI exposes direct socket syscalls.
+    #[cfg(target_arch = "x86")]
     denied_syscalls.push(libc::SYS_socketcall);
 
     // Validate seccomp_data.arch before syscall numbers; ABI mismatches are killed.
