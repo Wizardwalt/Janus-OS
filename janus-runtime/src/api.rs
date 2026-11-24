@@ -634,7 +634,8 @@ fn aria_chat_event_ids(conversation_id: &str, request_id: &str) -> (String, Stri
     digest.update(conversation_id.as_bytes());
     digest.update([0]);
     digest.update(request_id.as_bytes());
-    let key = hex::encode(digest.finalize());
+    use base64::Engine as _;
+    let key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest.finalize());
     (format!("user-v2-{key}"), format!("assistant-v2-{key}"))
 }
 
