@@ -307,6 +307,8 @@ mod tests {
             let fork_vfork_syscalls = [(57, "fork"), (58, "vfork")];
             #[cfg(any(target_arch = "x86", target_arch = "arm"))]
             let fork_vfork_syscalls = [(2, "fork"), (190, "vfork")];
+            #[cfg(target_arch = "aarch64")]
+            let fork_vfork_syscalls: [(libc::c_long, &str); 0] = [];
             for (number, name) in fork_vfork_syscalls {
                 let status = libc::syscall(number);
                 if status == 0 {
