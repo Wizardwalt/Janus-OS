@@ -39,6 +39,9 @@ jobs:
 
       - name: Cross-compile plugin worker
         run: cross check --locked --target ${{ matrix.target }} -p janus-runtime --bin janus-plugin-worker
+
+      - name: Compile worker seccomp test harness
+        run: cross test --no-run --locked --target ${{ matrix.target }} -p janus-runtime --bin janus-plugin-worker
   android-aarch64:
     name: Compile worker for aarch64-linux-android
     runs-on: ubuntu-latest
@@ -62,6 +65,9 @@ jobs:
 
       - name: Cross-compile plugin worker for Android
         run: cargo ndk -t arm64-v8a --platform 23 check --no-default-features -p janus-runtime --bin janus-plugin-worker
+
+      - name: Compile Android worker seccomp test harness
+        run: cargo ndk -t arm64-v8a --platform 23 test --no-run --no-default-features -p janus-runtime --bin janus-plugin-worker
 
       - name: Report Android target lockfile delta (informational)
         if: always()
