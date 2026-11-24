@@ -221,7 +221,30 @@ assert_code "$code" 409 "completed request ID cannot be reused with different co
 
 provider_count="$(curl --silent --show-error "$PROVIDER_BASE/count" | jq -r '.count')"
 test "$provider_count" = "2"
-echo "PASS: provider called exactly twice (one failure, one successful retry)" | tee -a "$TMP_DIR/results/test-results.txt"
+echo "PASS: first conversation called provider exactly twice (one failure, one successful retry)" | tee -a "$TMP_DIR/results/test-results.txt"
+
+# Request IDs are scoped to a conversation. Reusing the same ID in a different
+# conversation must create an independent turn rather than replaying old content.
+cat > "$TMP_DIR/second-chat.json" <<'JSON'
+{"conversation_id":"aria_retry_ci_002","message":"A separate conversation","request_id":"retry-001"}
+JSON
+code="$(http_code POST "$BASE/aria/chat" "$TMP_DIR/response.json" \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data-binary @"$TMP_DIR/second-chat.json")"
+assert_code "$code" 200 "same request ID is independent in a different conversation"
+jq -e '.data.conversation_id == "aria_retry_ci_002" and .data.content == "Aria idempotent retry succeeded."' \
+  "$TMP_DIR/response.json" >/dev/null
+
+code="$(http_code POST "$BASE/aria/chat" "$TMP_DIR/response.json" \
+  -H "Authorization: Bearer $OWNER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data-binary @"$TMP_DIR/second-chat.json")"
+assert_code "$code" 200 "second conversation retry replays only its own saved response"
+
+provider_count="$(curl --silent --show-error "$PROVIDER_BASE/count" | jq -r '.count')"
+test "$provider_count" = "3"
+echo "PASS: provider called exactly three times across two conversations; replay made no extra call" | tee -a "$TMP_DIR/results/test-results.txt"
 
 code="$(http_code GET "$BASE/aria/conversations/aria_retry_ci_001/events?limit=10" "$TMP_DIR/response.json" \
   -H "Authorization: Bearer $OWNER_TOKEN")"
