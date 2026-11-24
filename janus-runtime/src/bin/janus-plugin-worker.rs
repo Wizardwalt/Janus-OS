@@ -142,11 +142,11 @@ fn install_worker_seccomp_filter() -> Result<()> {
         427, // io_uring_register
         435, // clone3 is syscall 435 on the supported Linux ABIs.
     ];
-    // fork/vfork have dedicated syscall numbers on x86; ARM ABIs implement
-    // them through clone, which is denied above.
+    // fork/vfork have dedicated syscall numbers on x86 and 32-bit ARM EABI.
+    // AArch64 exposes process creation through clone/clone3 instead.
     #[cfg(target_arch = "x86_64")]
     denied_syscalls.extend([57, 58]);
-    #[cfg(target_arch = "x86")]
+    #[cfg(any(target_arch = "x86", target_arch = "arm"))]
     denied_syscalls.extend([2, 190]);
     // Legacy 32-bit x86 uses socketcall; ARM EABI exposes direct socket syscalls.
     #[cfg(target_arch = "x86")]
@@ -301,9 +301,33 @@ mod tests {
             assert_eq!(execveat_status, -1, "execveat must be denied");
             assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
 
-            let fork_status = libc::fork();
-            assert_eq!(fork_status, -1, "process creation through fork must be denied");
-            assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+            // Probe the raw fork/vfork syscall numbers, not only libc wrappers
+            // (which may implement fork via clone on ARM).
+            #[cfg(target_arch = "x86_64")]
+            let fork_vfork_syscalls = [(57, "fork"), (58, "vfork")];
+            #[cfg(any(target_arch = "x86", target_arch = "arm"))]
+            let fork_vfork_syscalls = [(2, "fork"), (190, "vfork")];
+            for (number, name) in fork_vfork_syscalls {
+                let status = libc::syscall(number);
+                if status == 0 {
+                    // If the policy regresses, do not let a probe child continue.
+                    libc::_exit(0);
+                }
+                if status > 0 {
+                    let mut child_status = 0;
+                    assert_eq!(
+                        libc::waitpid(status as libc::pid_t, &mut child_status, 0),
+                        status as libc::pid_t,
+                        "wait for unexpectedly-created {name} child"
+                    );
+                }
+                assert_eq!(status, -1, "{name} syscall must be denied");
+                assert_eq!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::EPERM),
+                    "{name} syscall must fail with EPERM"
+                );
+            }
 
             let clone3_status = libc::syscall(
                 435,
