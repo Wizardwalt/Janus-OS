@@ -137,6 +137,9 @@ fn install_worker_seccomp_filter() -> Result<()> {
         libc::SYS_execveat,
         libc::SYS_ptrace,
         libc::SYS_clone,
+        425, // io_uring_setup
+        426, // io_uring_enter
+        427, // io_uring_register
         435, // clone3 is syscall 435 on the supported Linux ABIs.
     ];
     // fork/vfork have dedicated syscall numbers on x86; ARM ABIs implement
@@ -182,8 +185,9 @@ fn install_worker_seccomp_filter() -> Result<()> {
 }
 
 /// Linux/Android resource limits and a narrow seccomp deny-list are applied
-/// before plugin source is parsed or executed. Network socket creation/use,
-/// process creation/execution, and ptrace are denied. File access is not yet isolated,
+/// before plugin source is parsed or executed. Direct socket syscalls and io_uring
+/// entry points are denied to prevent the common socket-API bypass, along with process
+/// creation/execution and ptrace. File access is not yet isolated,
 /// and this is not a complete namespace, filesystem, or separate-UID sandbox.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn apply_resource_limits() -> Result<()> {
@@ -252,6 +256,32 @@ mod tests {
             let socket = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             assert_eq!(socket, -1, "socket creation must be denied");
             assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+
+            // io_uring can issue socket operations without the direct socket
+            // syscalls above, so its setup/enter/register entry points are denied.
+            let io_uring_setup = libc::syscall(425, 1u32, std::ptr::null_mut::<libc::c_void>());
+            assert_eq!(io_uring_setup, -1, "io_uring_setup must be denied or unavailable");
+            assert!(matches!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EPERM) | Some(libc::ENOSYS)
+            ));
+            let io_uring_enter = libc::syscall(
+                426, -1, 0u32, 0u32, 0u32,
+                std::ptr::null_mut::<libc::c_void>(), 0u32,
+            );
+            assert_eq!(io_uring_enter, -1, "io_uring_enter must be denied or unavailable");
+            assert!(matches!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EPERM) | Some(libc::ENOSYS)
+            ));
+            let io_uring_register = libc::syscall(
+                427, -1, 0u32, std::ptr::null_mut::<libc::c_void>(), 0u32,
+            );
+            assert_eq!(io_uring_register, -1, "io_uring_register must be denied or unavailable");
+            assert!(matches!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EPERM) | Some(libc::ENOSYS)
+            ));
 
             let path = std::ffi::CString::new("/bin/true").unwrap();
             let argv = [path.as_ptr(), std::ptr::null()];
