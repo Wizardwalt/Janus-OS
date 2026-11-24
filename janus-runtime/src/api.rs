@@ -624,6 +624,21 @@ fn format_aria_context_hit(hit: UnifiedSearchHit) -> String {
     }
 }
 
+/// Stable event IDs scoped to an owner conversation and request ID.
+/// The request ID itself is not persisted in the event identifier.
+fn aria_chat_event_ids(conversation_id: &str, request_id: &str) -> (String, String) {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"janus-aria-chat-event-v2");
+    digest.update([0]);
+    digest.update(conversation_id.as_bytes());
+    digest.update([0]);
+    digest.update(request_id.as_bytes());
+    use base64::Engine as _;
+    let key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest.finalize());
+    (format!("user-v2-{key}"), format!("assistant-v2-{key}"))
+}
+
 async fn aria_chat(
     AxumState(state): AxumState<ApiState>,
     headers: HeaderMap,
@@ -653,20 +668,15 @@ async fn aria_chat(
             error: Some("request_id must contain 1..=140 UTF-8 bytes".into()),
         }));
     }
-    let user_event_id = format!("user-{request_id}");
-    let assistant_event_id = format!("assistant-{request_id}");
+    let (mut user_event_id, mut assistant_event_id) =
+        aria_chat_event_ids(&request.conversation_id, &request_id);
+    // Preserve retries created before the conversation-scoped v2 event IDs.
+    let legacy_user_event_id = format!("user-{request_id}");
+    let legacy_assistant_event_id = format!("assistant-{request_id}");
 
     // One active turn per runtime prevents concurrent requests from interleaving
     // user/assistant messages in a shared conversation context.
     let _turn_guard = state.aria_chat_lock.lock().await;
-    let user_event = ConversationEvent {
-        event_id: user_event_id.clone(),
-        role: "user".into(),
-        content: request.message.clone(),
-        provider: None,
-        model: None,
-        created_at: chrono::Utc::now(),
-    };
     let (context, private_context) = {
         let mut stores = match state.aria.lock() {
             Ok(stores) => stores,
@@ -677,8 +687,9 @@ async fn aria_chat(
         };
 
         // Validate the idempotency key against the original user message before
-        // returning a saved assistant response. Otherwise a caller could reuse a
-        // completed request ID with different content and receive the old answer.
+        // returning a saved assistant response. New event IDs are scoped to the
+        // conversation; legacy IDs are checked only as a backward-compatible retry.
+        let mut append_user_event = false;
         match conversations.get_event(&account.id, &request.conversation_id, &user_event_id) {
             Ok(Some(saved)) if saved.role == "user" && saved.content == request.message => {}
             Ok(Some(_)) => return (StatusCode::CONFLICT, Json(ApiResponse {
@@ -698,17 +709,59 @@ async fn aria_chat(
                         status: "error".into(), data: None, error: Some(error.to_string()),
                     })),
                 }
-                if let Err(error) = conversations.append_event(
-                    &account.id, &request.conversation_id, &user_event,
+
+                // Existing encrypted conversations may contain pre-v2 event IDs.
+                // Continue those retries without duplicating a previously saved turn.
+                match conversations.get_event(
+                    &account.id, &request.conversation_id, &legacy_user_event_id,
                 ) {
-                    return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+                    Ok(Some(saved)) if saved.role == "user" && saved.content == request.message => {
+                        user_event_id = legacy_user_event_id.clone();
+                        assistant_event_id = legacy_assistant_event_id.clone();
+                    }
+                    Ok(Some(_)) => return (StatusCode::CONFLICT, Json(ApiResponse {
+                        status: "error".into(), data: None,
+                        error: Some("chat request ID was already used with different content".into()),
+                    })),
+                    Ok(None) => {
+                        match conversations.get_event(
+                            &account.id, &request.conversation_id, &legacy_assistant_event_id,
+                        ) {
+                            Ok(None) => append_user_event = true,
+                            Ok(Some(_)) => return (StatusCode::CONFLICT, Json(ApiResponse {
+                                status: "error".into(), data: None,
+                                error: Some("chat request ID has no matching saved user event".into()),
+                            })),
+                            Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+                                status: "error".into(), data: None, error: Some(error.to_string()),
+                            })),
+                        }
+                    }
+                    Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
                         status: "error".into(), data: None, error: Some(error.to_string()),
-                    }));
+                    })),
                 }
             }
             Err(error) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
                 status: "error".into(), data: None, error: Some(error.to_string()),
             })),
+        }
+        if append_user_event {
+            let user_event = ConversationEvent {
+                event_id: user_event_id.clone(),
+                role: "user".into(),
+                content: request.message.clone(),
+                provider: None,
+                model: None,
+                created_at: chrono::Utc::now(),
+            };
+            if let Err(error) = conversations.append_event(
+                &account.id, &request.conversation_id, &user_event,
+            ) {
+                return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+                    status: "error".into(), data: None, error: Some(error.to_string()),
+                }));
+            }
         }
 
         // A matching saved user event plus a saved assistant event is a completed
