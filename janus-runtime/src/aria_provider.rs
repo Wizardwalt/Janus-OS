@@ -618,4 +618,30 @@ mod tests {
         assert_eq!(completion.model, "claude-test-returned");
     }
 
+    #[tokio::test]
+    async fn anthropic_adapter_rejects_tool_and_developer_transcript_roles() {
+        let provider = AriaAnthropicProvider::new(
+            "http://127.0.0.1:9/v1/messages",
+            "claude-test".into(),
+            "test-key".into(),
+        )
+        .unwrap();
+
+        for role in ["tool", "developer", "function"] {
+            let error = provider
+                .complete(&[AriaProviderMessage {
+                    role: role.into(),
+                    content: "Untrusted external transcript content".into(),
+                }])
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("only system, user, and assistant"),
+                "unexpected error for role {role}: {error}"
+            );
+        }
+    }
+
 }
