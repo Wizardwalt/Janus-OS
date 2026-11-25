@@ -158,6 +158,25 @@ fn install_worker_seccomp_filter() -> Result<()> {
     filter.push(SockFilter { code: BPF_JMP_JEQ_K, jt: 1, jf: 0, k: audit_arch });
     filter.push(SockFilter { code: BPF_RET_K, jt: 0, jf: 0, k: SECCOMP_RET_KILL_PROCESS });
     filter.push(SockFilter { code: BPF_LD_W_ABS, jt: 0, jf: 0, k: 0 });
+    #[cfg(target_arch = "x86_64")]
+    {
+        // The x32 ABI sets bit 30 in the syscall number while retaining
+        // AUDIT_ARCH_X86_64. Reject it before comparing native syscall numbers,
+        // otherwise an x32 socket syscall could bypass the deny-list.
+        const BPF_JMP_JSET_K: u16 = 0x45;
+        filter.push(SockFilter {
+            code: BPF_JMP_JSET_K,
+            jt: 0,
+            jf: 1,
+            k: 0x4000_0000,
+        });
+        filter.push(SockFilter {
+            code: BPF_RET_K,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_ERRNO | libc::EPERM as u32,
+        });
+    }
     for syscall in denied_syscalls {
         filter.push(SockFilter { code: BPF_JMP_JEQ_K, jt: 0, jf: 1, k: syscall as u32 });
         filter.push(SockFilter {
@@ -256,6 +275,23 @@ mod tests {
             let socket = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             assert_eq!(socket, -1, "socket creation must be denied");
             assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
+
+            #[cfg(target_arch = "x86_64")]
+            {
+                // x32 syscall numbers retain the x86_64 seccomp architecture
+                // but set bit 30. The filter must reject that ABI explicitly.
+                let x32_socket = libc::syscall(
+                    (0x4000_0000_u32 | libc::SYS_socket as u32) as libc::c_long,
+                    libc::AF_INET,
+                    libc::SOCK_STREAM,
+                    0,
+                );
+                assert_eq!(x32_socket, -1, "x32 socket syscall must be denied");
+                assert_eq!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::EPERM)
+                );
+            }
 
             // io_uring can issue socket operations without the direct socket
             // syscalls above, so its setup/enter/register entry points are denied.
