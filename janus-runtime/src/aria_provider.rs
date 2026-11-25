@@ -619,6 +619,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn anthropic_adapter_does_not_follow_redirects() {
+        async fn redirect() -> axum::response::Response {
+            axum::response::Response::builder()
+                .status(axum::http::StatusCode::TEMPORARY_REDIRECT)
+                .header(axum::http::header::LOCATION, "/target")
+                .body(axum::body::Body::empty())
+                .unwrap()
+        }
+        async fn target() -> Json<Value> {
+            Json(json!({
+                "model": "redirected",
+                "content": [{ "type": "text", "text": "redirect target must not be reached" }]
+            }))
+        }
+
+        let app = Router::new()
+            .route("/v1/messages", post(redirect))
+            .route("/target", post(target));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+        let provider = AriaAnthropicProvider::new(
+            format!("http://{address}/v1/messages"),
+            "claude-test".into(),
+            "test-key".into(),
+        )
+        .unwrap();
+        let error = provider
+            .complete(&[AriaProviderMessage {
+                role: "user".into(),
+                content: "Hello".into(),
+            }])
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("HTTP 307"));
+    }
+
+    #[tokio::test]
     async fn anthropic_adapter_rejects_tool_and_developer_transcript_roles() {
         let provider = AriaAnthropicProvider::new(
             "http://127.0.0.1:9/v1/messages",
