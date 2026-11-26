@@ -37,6 +37,23 @@ printf '%s\n' "$pid" > test-results/pidof.txt
 timeout 30 adb shell dumpsys activity activities > test-results/activities.txt 2>&1 || true
 timeout 30 adb logcat -d -t 10000 > test-results/emulator-logcat.txt 2>&1 || true
 
+# A live PID and a resumed Activity can still be the Android starting splash
+# window. Require the actual Janus view hierarchy to be drawn before passing.
+ui_ready=0
+for attempt in $(seq 1 20); do
+  timeout 20 adb shell uiautomator dump --compressed /sdcard/janus-window.xml \
+    > test-results/uiautomator-dump.txt 2>&1 || true
+  timeout 10 adb shell cat /sdcard/janus-window.xml \
+    > test-results/janus-window.xml 2>/dev/null || true
+  if grep -q 'JANUS OMEGA' test-results/janus-window.xml &&
+     grep -q 'DASHBOARD' test-results/janus-window.xml &&
+     grep -q 'HARDWARE' test-results/janus-window.xml; then
+    ui_ready=1
+    break
+  fi
+  sleep 2
+done
+
 if [[ -z "$pid" ]]; then
   echo "Janus process did not remain alive after launcher invocation." >&2
   grep -E 'FATAL EXCEPTION|AndroidRuntime|Process:|Unable to start' test-results/emulator-logcat.txt | tail -n 80 >&2 || true
@@ -45,6 +62,13 @@ fi
 
 if ! grep -E 'mResumedActivity|topResumedActivity|ResumedActivity:|Resumed:' test-results/activities.txt | grep -q "$PACKAGE"; then
   echo "Janus process is alive but no resumed Janus activity was found." >&2
+  grep -E 'mResumedActivity|topResumedActivity|ResumedActivity:|Resumed:' test-results/activities.txt | tail -n 40 >&2 || true
+  exit 1
+fi
+
+if [[ "$ui_ready" != "1" ]]; then
+  echo "Janus process and Activity started, but the expected Janus UI did not render." >&2
+  cat test-results/uiautomator-dump.txt >&2 || true
   grep -E 'mResumedActivity|topResumedActivity|ResumedActivity:|Resumed:' test-results/activities.txt | tail -n 40 >&2 || true
   exit 1
 fi
