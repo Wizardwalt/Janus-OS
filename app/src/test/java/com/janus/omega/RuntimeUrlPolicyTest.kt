@@ -30,6 +30,14 @@ class RuntimeUrlPolicyTest {
     }
 
     @Test
+    fun runtimeEndpointRejectsPortZeroAndSubpathDeployment() {
+        assertNull(RuntimeUrlPolicy.parse("https://janus.example:0", false))
+        assertNull(RuntimeUrlPolicy.parse("https://janus.example/community", false))
+        assertNull(RuntimeUrlPolicy.parse("https://janus.example/community/", false))
+        assertNotNull(RuntimeUrlPolicy.parse("https://janus.example/", false))
+    }
+
+    @Test
     fun originComparisonRejectsHostPrefixSpoofing() {
         val expected = URI("https://janus.example")
         assertFalse(RuntimeUrlPolicy.sameOrigin(expected, "https://janus.example.attacker.invalid/login"))
