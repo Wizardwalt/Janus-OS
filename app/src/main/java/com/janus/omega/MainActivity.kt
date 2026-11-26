@@ -89,7 +89,6 @@ class MainActivity : AppCompatActivity() {
             }
             val conversationId = snapshot.optString("id")
             val title = snapshot.optString("title").take(100)
-            val provider = snapshot.optString("provider").take(80)
             val messages = snapshot.optJSONArray("messages")
                 ?: error("The selected snapshot has no messages.")
             require(conversationId.isNotBlank() && title.isNotBlank() && messages.length() > 0) {
