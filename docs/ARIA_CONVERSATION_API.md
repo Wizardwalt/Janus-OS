@@ -66,7 +66,7 @@ The runtime derives the owner ID from the authenticated account. No endpoint acc
 
 - `GET /aria/status` — report provider, encrypted-history, and private-memory readiness without exposing credentials.\n- `GET /aria/conversations?limit=20` — list the authenticated user's conversations (maximum 100).
 - `GET /aria/conversations/{conversation_id}/events?limit=100` — read that owner's events (maximum 1,000).
-- `POST /aria/conversations/{conversation_id}/events` — append an event. The conversation is created on first append.
+- `POST /aria/conversations/{conversation_id}/events` — append an owner-scoped user or assistant event. The conversation is created on first append; external clients cannot submit privileged system/tool events.
 - `DELETE /aria/conversations/{conversation_id}` — delete that owner's conversation and cascade-delete its events.
 
 Append request example:
