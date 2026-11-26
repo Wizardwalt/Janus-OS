@@ -27,7 +27,7 @@ class MainActivity : AppCompatActivity() {
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
             tab.text = when (position) {
                 0 -> "DASHBOARD"
-                1 -> "OPS"
+                1 -> "CATALOG"
                 2 -> "HARDWARE"
                 else -> ""
             }
