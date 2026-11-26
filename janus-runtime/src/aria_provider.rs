@@ -683,4 +683,35 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn provider_api_key_file_rejects_symlinks() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let target = std::env::temp_dir().join(format!(
+            "janus-aria-provider-key-target-{}-{suffix}.txt",
+            std::process::id()
+        ));
+        let link = std::env::temp_dir().join(format!(
+            "janus-aria-provider-key-link-{}-{suffix}.txt",
+            std::process::id()
+        ));
+
+        std::fs::write(&target, "private-test-token\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(
+            read_private_api_key(&link).is_err(),
+            "a symlink must not be accepted even when its target is owner-only"
+        );
+
+        std::fs::remove_file(&link).unwrap();
+        std::fs::remove_file(&target).unwrap();
+    }
+
 }
