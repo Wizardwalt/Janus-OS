@@ -18,9 +18,9 @@ test "$boot_complete" = "1"
 adb devices -l > test-results/adb-devices.txt
 adb shell getprop sys.boot_completed > test-results/boot-completed.txt
 
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/debug/app-debug.apk > test-results/install.txt 2>&1
 adb shell am force-stop "$PACKAGE"
-adb shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
+adb shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 > test-results/monkey-launch.txt 2>&1 || true
 
 pid=""
 for attempt in $(seq 1 60); do
@@ -30,11 +30,25 @@ for attempt in $(seq 1 60); do
   fi
   sleep 1
 done
-test -n "$pid"
 
-adb shell dumpsys activity activities > test-results/activities.txt
-grep -E 'mResumedActivity|topResumedActivity|ResumedActivity:|Resumed:' test-results/activities.txt | grep "$PACKAGE"
-adb logcat -d -t 5000 > test-results/emulator-logcat.txt
+# Collect evidence before any assertion can terminate the job. In particular,
+# a crash immediately after launch must still leave logcat and activity state.
+printf '%s\n' "$pid" > test-results/pidof.txt
+adb shell dumpsys activity activities > test-results/activities.txt 2>&1 || true
+adb logcat -d -t 10000 > test-results/emulator-logcat.txt 2>&1 || true
+
+if [[ -z "$pid" ]]; then
+  echo "Janus process did not remain alive after launcher invocation." >&2
+  grep -E 'FATAL EXCEPTION|AndroidRuntime|Process:|Unable to start' test-results/emulator-logcat.txt | tail -n 80 >&2 || true
+  exit 1
+fi
+
+if ! grep -E 'mResumedActivity|topResumedActivity|ResumedActivity:|Resumed:' test-results/activities.txt | grep -q "$PACKAGE"; then
+  echo "Janus process is alive but no resumed Janus activity was found." >&2
+  grep -E 'mResumedActivity|topResumedActivity|ResumedActivity:|Resumed:' test-results/activities.txt | tail -n 40 >&2 || true
+  exit 1
+fi
+
 if grep -q 'FATAL EXCEPTION' test-results/emulator-logcat.txt; then
   echo 'Fatal Android exception found in emulator log.' >&2
   exit 1
