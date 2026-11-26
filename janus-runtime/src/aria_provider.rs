@@ -375,9 +375,9 @@ fn read_private_api_key(path: &Path) -> Result<String> {
     let mut options = OpenOptions::new();
     options.read(true);
 
-    // Open the path itself without following a symlink. Checking metadata before
-    // opening is insufficient: an attacker could swap the path between the check
-    // and read. O_NONBLOCK also ensures a substituted FIFO cannot hang startup.
+    // On Unix, open the path itself without following a symlink. Checking
+    // metadata before opening is insufficient: an attacker could swap the path
+    // between the check and read. O_NONBLOCK also prevents FIFO startup hangs.
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -713,6 +713,31 @@ mod tests {
                 "unexpected error for role {role}: {error}"
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn provider_api_key_file_rejects_fifo_without_blocking() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "janus-aria-provider-key-fifo-{}-{}.pipe",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let encoded = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(encoded.as_ptr(), 0o600) },
+            0,
+            "create FIFO fixture"
+        );
+        let result = read_private_api_key(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert!(result.is_err(), "a FIFO must never be accepted as a key file");
     }
 
     #[cfg(unix)]
