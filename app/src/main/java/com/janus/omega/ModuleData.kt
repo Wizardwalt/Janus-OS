@@ -84,4 +84,8 @@ object ModuleData {
             "POST_QUANTUM_SIGN", "LATTICE_CRYPTO", "KYBER_ENCRYPT", "DILITHIUM_SIGN"
         )
     )
+
+    /** Number of catalog entries; entries are labels, not executable modules. */
+    val totalEntries: Int
+        get() = categories.sumOf { it.second.size }
 }
