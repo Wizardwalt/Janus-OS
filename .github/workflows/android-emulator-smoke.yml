@@ -111,11 +111,10 @@ jobs:
           yes | sdkmanager --licenses >/dev/null
           sdkmanager "platforms;android-37.2" "build-tools;36.0.0"
 
-      - name: Install Gradle 9.6.0
-        run: |
-          curl -fsSLo /tmp/gradle.zip https://services.gradle.org/distributions/gradle-9.6.0-bin.zip
-          unzip -q /tmp/gradle.zip -d /tmp
-          echo "/tmp/gradle-9.6.0/bin" >> "$GITHUB_PATH"
+      - name: Set up Gradle 9.6.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
 
       - name: Run OmniVault unit tests, Android-test compilation, and APK builds
         run: |
