@@ -1,7 +1,7 @@
 # Aria Ecosystem Integration Contract
 
-**Status:** Stage 1 architecture contract  
-**Version:** 1.0.0  
+**Status:** Versioned ecosystem architecture contract; implementation status refreshed 2026-11-20  
+**Version:** 1.1.0  
 **Applies to:** Aria, Janus OS, OmniVault, Janus Community, and the Multicolored Hat Society
 
 ## 1. Identity and independence
@@ -70,11 +70,11 @@ No Society membership or hat identity grants permission to execute Janus tools o
 - Original provider exports remain byte-for-byte authoritative and are never rewritten by Aria.
 - Any Aria import is a derived, source-linked snapshot, not a replacement for the original.
 - Access is opt-in and owner-scoped to selected conversations or artifacts.
-- The first integration contract is read-only; write, delete, or vault-wide access is not implied.
+- The existing first integration slice is read-only. The target architecture also makes OmniVault Aria's canonical durable-memory layer: Aria may propose or write only to a dedicated derived-memory namespace under explicit, scoped grants and configured capture policy. This does not grant mutation or deletion rights over original provider archives.
 - OmniVault's AI Gateway must enforce explicit grants, scope limits, revocation, and audit before production use.
 - Aria must remain functional without OmniVault, and OmniVault must remain useful without Aria.
 
-The current Rust `janus_core::aria::omnivault` module is a read-only import contract that accepts an owner-approved normalized snapshot. It is not evidence of a live cross-app connection. The Android gateway is currently described as in-process; a production cross-app API remains future work.
+The current Rust `janus_core::aria::omnivault` module is a read-only import contract that accepts an owner-approved normalized snapshot. OmniVault's Kotlin `VaultGateway` is in-process only. Neither is a live cross-app connection. A production bridge, selected-record grants, consent UI, durable audit, derived-memory write API, and synchronization remain future work. See the Master Identity Charter and the OmniVault memory integration plan.
 
 ### Aria ↔ Communities
 
@@ -114,24 +114,25 @@ Permissions are scoped, time-bounded where practical, revocable, and logged. A m
 - Every feature is labelled implemented-and-tested, implemented-but-unverified, simulated/demo, stub/placeholder, or planned.
 - No scripted avatar text, canned response, or demo output is presented as live model reasoning, telemetry, or a completed device operation.
 
-## 7. Stage 1 implementation status
+## 7. Current implementation status — 2026-11-20
 
-Already present in the current Janus-OS Aria foundation branch:
-- Constitution and ten-domain registry.
-- Portable provenance-aware knowledge record schema.
-- Rust knowledge contracts and SQLite store.
-- Source-preserving ingestion, bounded extraction, scoped retrieval, and human-review learning queue.
-- Owner-scoped memory interfaces and encrypted-memory implementation requiring host-managed keys.
-- Authenticated runtime routes for explicit memory and knowledge operations.
-- A read-only, owner-approved OmniVault normalized-snapshot import contract.
+Present in Janus `main`:
+- Versioned constitution, ten-domain registry, portable knowledge schema, and SQLite knowledge store.
+- Source-preserving ingestion, bounded plain-text/simple-HTML extraction, scoped retrieval, human-review learning proposals, review receipts, and recoverable persistence outbox.
+- Authenticated provider-backed chat with OpenAI-compatible and native Anthropic adapters.
+- Owner-scoped encrypted conversation history, cursor pagination, complete versioned JSON export, and browser-side cancellation controls.
+- Owner-scoped encrypted personal-memory storage and explicit remember/list/correct/forget APIs, with host-managed keys.
+- Read-only, owner-approved OmniVault normalized-snapshot import contract.
 
-Still not complete:
-- A live model provider and chat-context assembly.
-- Full semantic/vector retrieval and quality evaluation.
-- Production key generation, backup, rotation, and recovery workflows.
-- A live cross-app OmniVault AI Gateway; the Rust snapshot importer is a contract, not an operational bridge.
-- Separate repositories and deployed websites for Janus Community and the Multicolored Hat Society.
-- Production identity federation, moderation, and account integrations across the community platforms.
+Still incomplete or unverified:
+- Provider streaming, further provider protocols, guaranteed remote cancellation, and live provider acceptance on the user's device.
+- Semantic retrieval, full document/OCR extraction, contradiction detection, learning evaluation, and background autonomous learning.
+- Personal-memory key rotation/recovery and comprehensive backup/retention workflows.
+- A live cross-app OmniVault bridge, selected-record consent/revocation/audit, derived-memory write API, and canonical sync.
+- Aria's portable identity bundle, cross-device recovery, operator hardware/biometric enrollment, succession, voice, proactive communication, and production tool gateway.
+- Separate deployed websites and production identity/moderation integrations for the community platforms.
+
+OmniVault is now designated as Aria's intended canonical durable memory and continuity layer. Existing Janus personal memories must be migrated only through a versioned, hash/count-verified, owner-scoped process with rollback; do not dual-write or switch authority before that migration is accepted.
 
 ## 8. Change control
 

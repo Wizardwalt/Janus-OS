@@ -2,7 +2,7 @@
 
 **One intelligence. Many disciplines. No artificial boundaries.**
 
-Aria is a provider-independent AI assistant and knowledge platform being developed within Janus OS, with a planned read-only knowledge integration for OmniVault. Her identity, knowledge contracts, and user-facing principles are designed to remain stable even when the underlying AI model or host application changes.
+Aria is a provider-independent AI companion and knowledge platform being developed within Janus OS. OmniVault is designated as her intended canonical long-term memory and continuity layer; the current integration is still a read-only snapshot contract, not a live cross-app bridge. Her identity, knowledge contracts, and user-facing principles must remain stable when the underlying model or host application changes.
 
 ## What makes Aria different
 
@@ -50,7 +50,7 @@ Implemented in this repository:
 
 ### Stage 1 boundaries
 
-Stage 1 is the foundation, not a claim that every future capability already exists. Aria now has an authenticated provider-backed chat path with OpenAI-compatible and native Anthropic adapters, plus encrypted owner-scoped conversation storage and cursor pagination. Streaming, additional provider protocols, autonomous learning, voice, and a production tool gateway remain incomplete. A provider adapter does not mean credentials have been configured or a live provider has been acceptance-tested on the user's device. The host application must authenticate users and authorize any broader access scope; the knowledge store enforces a scope but is not an identity provider.
+Stage 1 is the foundation, not a claim that every future capability already exists. Aria has an authenticated provider-backed chat path with OpenAI-compatible and native Anthropic adapters, encrypted owner-scoped conversation storage, cursor pagination, complete conversation export, and browser-side cancellation controls. Streaming, additional provider protocols, remote-provider cancellation guarantees, autonomous background learning, voice, and a production tool gateway remain incomplete. A provider adapter does not mean credentials are configured or that a live provider has been acceptance-tested on the user's device. The host authenticates users and authorizes access; the knowledge store is not an identity provider.
 
 ## Stage 2 — Memory and learning (in progress)
 
@@ -62,18 +62,19 @@ Implemented first slices:
 - Explainable Multicolored Hat keyword suggestions in `janus-core/src/aria/classification.rs`, including matched-term explanations and Rainbow cross-domain suggestions. These are advisory, not calibrated confidence or authorization.
 - A durable human-review proposal queue in `janus-core/src/aria/learning.rs`. Proposals must cite the exact source artifact and hash; acceptance produces a `Reviewed` record, never an automatically `Verified` one.
 - Immutable accept/reject review receipts with reviewer identity, timestamp and notes, plus a recoverable, organization-scoped persistence outbox.
-- An explainable Multicolored Hat keyword classifier with matched-term explanations and Rainbow cross-domain suggestions.
 - An owner-scoped plaintext development memory store and an XChaCha20-Poly1305 encrypted production memory store in `janus-core/src/aria/encrypted_memory.rs`.
 - Unified retrieval across public/internal unscoped knowledge, owner-private source passages and the authenticated owner's encrypted personal memories.
 - An owner-approved, read-only OmniVault normalized-snapshot importer in `janus-core/src/aria/omnivault.rs`.
 - Authenticated Janus Runtime API routes for text ingestion, search, learning proposals/review and explicit remember/list/correct/forget operations. Personal-memory endpoints require a separate owner-only key file.
 
-Stage 2 is **not complete**. Standards-complete PDF/DOCX/HTML5 extraction and OCR, wiring the authenticated APIs into Aria's chat UI and model context assembly, semantic/vector retrieval, contradiction detection and evaluation, key rotation/recovery and comprehensive retention/backup workflows remain. The learning outbox is recoverable and tenant-scoped but is an at-least-once hand-off across separate SQLite connections, not one cross-database transaction. The current OmniVault Android gateway is in-process only; the Rust snapshot importer is a contract, not a live cross-app connection. The current HTML helper handles simple exported pages and is not a full HTML5 parser. The encrypted memory store requires host-managed key generation, storage, backup and rotation.
+Stage 2 is **not complete**. The authenticated live chat path can opt into owner-scoped retrieval from Janus knowledge, source artifacts, and encrypted personal memories, but this is not semantic/vector retrieval and does not yet include OmniVault content. Standards-complete PDF/DOCX/HTML5 extraction and OCR, semantic retrieval, contradiction detection and evaluation, retention workflows, and key rotation/recovery remain. The learning outbox is recoverable and tenant-scoped but is an at-least-once hand-off across separate SQLite connections, not one cross-database transaction. The current OmniVault Android gateway is in-process only; the Rust snapshot importer is a contract, not a live cross-app connection. The current HTML helper handles simple exported pages and is not a full HTML5 parser. The encrypted memory store requires host-managed key generation, storage, backup and rotation.
 
 See [Memory and Learning System](ARIA_MEMORY_AND_LEARNING.md) for the implementation contract and remaining exit criteria.
 
 ## Architecture documents
 
+- [Master Identity and Architecture Charter](ARIA_MASTER_IDENTITY_AND_ARCHITECTURE_CHARTER.md) — user-directed identity, memory, autonomy, operator, continuity, and embodiment goals.
+- [Implementation Audit](ARIA_IMPLEMENTATION_AUDIT.md) — evidence-based status and gaps against the charter.
 - [Aria Constitution](ARIA_CONSTITUTION.md) — identity, principles, memory boundaries and host responsibilities.
 - [Multicolored Hat Registry](MULTICOLORED_HAT_REGISTRY.json) — stable domain IDs, descriptions and routing rules.
 - [Knowledge Record Schema](KNOWLEDGE_RECORD_SCHEMA.json) — portable record format and provenance contract.
@@ -106,4 +107,4 @@ The GitHub Actions workflow is the recorded CI verification for the repository b
 
 ## Project status
 
-Aria's foundation is under active development on the `aria/multicolored-hat-foundation` branch and tracked in [Pull Request #10](https://github.com/Wizardwalt/Janus-OS/pull/10). It remains a draft until the owner chooses to approve its review and integration.
+The current `main` branch includes the provider-backed chat, encrypted owner-scoped conversation history, knowledge and learning foundations, and a read-only OmniVault snapshot importer. See the [implementation audit](ARIA_IMPLEMENTATION_AUDIT.md) for exact evidence and gaps. The Master Charter records intended future behavior; it is not a claim that those capabilities are implemented.
