@@ -6,7 +6,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use reqwest::{redirect::Policy, Client, Url};
 use serde::{Deserialize, Serialize};
-use std::{future::Future, path::Path, pin::Pin, sync::Arc, time::Duration};
+use std::{fs::OpenOptions, future::Future, io::Read, path::Path, pin::Pin, sync::Arc, time::Duration};
 
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ASSISTANT_MESSAGE_BYTES: usize = 64 * 1024;
@@ -372,8 +372,32 @@ fn validate_endpoint(endpoint: &Url) -> Result<()> {
 }
 
 fn read_private_api_key(path: &Path) -> Result<String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .with_context(|| format!("reading Aria provider key metadata at {}", path.display()))?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+
+    // On Unix, open the path itself without following a symlink. Checking
+    // metadata before opening is insufficient: an attacker could swap the path
+    // between the check and read. O_NONBLOCK also prevents FIFO startup hangs.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    #[cfg(not(unix))]
+    {
+        let path_metadata = std::fs::symlink_metadata(path)
+            .with_context(|| format!("reading Aria provider key metadata at {}", path.display()))?;
+        ensure!(path_metadata.file_type().is_file(),
+            "Aria provider key path must be a regular, non-symlink file");
+    }
+
+    let file = options
+        .open(path)
+        .with_context(|| format!("opening Aria provider key file at {}", path.display()))?;
+    // Validate the opened descriptor, not a separate path lookup.
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("reading opened Aria provider key metadata at {}", path.display()))?;
     ensure!(metadata.file_type().is_file(),
         "Aria provider key path must be a regular, non-symlink file");
     ensure!(metadata.len() > 0 && metadata.len() <= 4096,
@@ -384,8 +408,16 @@ fn read_private_api_key(path: &Path) -> Result<String> {
         ensure!(metadata.permissions().mode() & 0o077 == 0,
             "Aria provider key file permissions must be owner-only (0600)");
     }
-    let key = std::fs::read_to_string(path)
+
+    // Bound the actual read too, so a file that grows after fstat cannot exceed
+    // the configured secret-size limit.
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(4097)
+        .read_to_end(&mut bytes)
         .with_context(|| format!("reading Aria provider key file at {}", path.display()))?;
+    ensure!(!bytes.is_empty() && bytes.len() <= 4096,
+        "Aria provider key file must contain 1..=4096 bytes");
+    let key = String::from_utf8(bytes).context("Aria provider key file is not valid UTF-8")?;
     let key = key.trim();
     ensure!(!key.is_empty() && !key.chars().any(char::is_whitespace),
         "Aria provider key file must contain one non-empty token");
@@ -681,6 +713,31 @@ mod tests {
                 "unexpected error for role {role}: {error}"
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn provider_api_key_file_rejects_fifo_without_blocking() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "janus-aria-provider-key-fifo-{}-{}.pipe",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let encoded = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(encoded.as_ptr(), 0o600) },
+            0,
+            "create FIFO fixture"
+        );
+        let result = read_private_api_key(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert!(result.is_err(), "a FIFO must never be accepted as a key file");
     }
 
     #[cfg(unix)]
