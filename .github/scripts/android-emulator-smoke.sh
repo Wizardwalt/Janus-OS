@@ -47,7 +47,10 @@ for attempt in $(seq 1 12); do
     > test-results/janus-window.xml 2>/dev/null || true
   if grep -q 'JANUS OMEGA' test-results/janus-window.xml &&
      grep -q 'DASHBOARD' test-results/janus-window.xml &&
-     grep -q 'HARDWARE' test-results/janus-window.xml; then
+     grep -q 'CATALOG' test-results/janus-window.xml &&
+     grep -q 'HARDWARE' test-results/janus-window.xml &&
+     grep -q '0 EXECUTABLE' test-results/janus-window.xml &&
+     grep -q '260 CATALOGED' test-results/janus-window.xml; then
     ui_ready=1
     break
   fi
