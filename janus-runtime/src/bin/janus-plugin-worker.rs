@@ -407,4 +407,56 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    const RESOURCE_CHILD_ENV: &str = "JANUS_RESOURCE_LIMIT_PROBE_CHILD";
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn resource_limits_probe_child() {
+        if std::env::var_os(RESOURCE_CHILD_ENV).is_none() {
+            return;
+        }
+
+        apply_resource_limits().expect("worker resource and seccomp policy must install");
+
+        unsafe fn current_limit(resource: libc::c_int) -> libc::rlim_t {
+            let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+            assert_eq!(
+                libc::getrlimit(resource as _, limit.as_mut_ptr()),
+                0,
+                "getrlimit must succeed"
+            );
+            limit.assume_init().rlim_cur
+        }
+
+        unsafe {
+            assert!(current_limit(libc::RLIMIT_CPU as libc::c_int) <= 6);
+            assert!(current_limit(libc::RLIMIT_AS as libc::c_int) <= 512 * 1024 * 1024);
+            assert!(current_limit(libc::RLIMIT_NOFILE as libc::c_int) <= 16);
+            assert!(current_limit(libc::RLIMIT_FSIZE as libc::c_int) <= 1024 * 1024);
+            assert_eq!(current_limit(libc::RLIMIT_CORE as libc::c_int), 0);
+
+            // PR_GET_DUMPABLE = 3; PR_GET_NO_NEW_PRIVS = 39.
+            assert_eq!(libc::prctl(3, 0, 0, 0, 0), 0);
+            assert_eq!(libc::prctl(39, 0, 0, 0, 0), 1);
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn worker_applies_resource_limits_and_privilege_restrictions() {
+        let executable = std::env::current_exe().expect("test executable path");
+        let output = Command::new(executable)
+            .args(["--exact", "tests::resource_limits_probe_child", "--nocapture"])
+            .env(RESOURCE_CHILD_ENV, "1")
+            .output()
+            .expect("launch isolated resource-limit probe process");
+        assert!(
+            output.status.success(),
+            "resource-limit probe failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
 }
