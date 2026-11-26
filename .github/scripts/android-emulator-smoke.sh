@@ -39,7 +39,7 @@ fi
 
 timeout 60 adb install -r app/build/outputs/apk/debug/app-debug.apk > test-results/install.txt 2>&1
 timeout 30 adb shell am force-stop "$PACKAGE"
-timeout 45 adb shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 > test-results/monkey-launch.txt 2>&1 || true
+timeout 60 adb shell am start -W -n "$PACKAGE/.MainActivity" > test-results/launch.txt 2>&1
 
 pid=""
 for attempt in $(seq 1 60); do
