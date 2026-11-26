@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# Only the newest PR head needs an emulator; avoid running stale, expensive AVDs.
+concurrency:
+  group: janus-android-emulator-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   emulator-smoke:
     runs-on: ubuntu-latest
