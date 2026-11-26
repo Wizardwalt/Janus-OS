@@ -8,7 +8,8 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="  TACTICAL MODULES :: 1,233 LOADED :: TAP TO EXECUTE"
+        android:id="@+id/catalog_header"
+        android:text="  MODULE CATALOG :: REFERENCE ONLY"
         android:textColor="#9D00FF"
         android:fontFamily="monospace"
         android:textSize="11sp"
