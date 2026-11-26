@@ -22,7 +22,7 @@ timeout 15 adb shell getprop sys.boot_completed > test-results/boot-completed.tx
 # sys.boot_completed can precede SystemUI readiness by several minutes on TCG.
 # Do not launch Janus while the home window manager still has no focused window.
 home_ready=0
-for attempt in $(seq 1 60); do
+for attempt in $(seq 1 90); do
   timeout 15 adb shell dumpsys window windows > test-results/boot-windows.txt 2>&1 || true
   if grep -F 'mCurrentFocus=Window{' test-results/boot-windows.txt | grep -Fq 'com.android.launcher3'; then
     home_ready=1
@@ -31,6 +31,7 @@ for attempt in $(seq 1 60); do
   sleep 5
 done
 if [[ "$home_ready" != "1" ]]; then
+  timeout 30 adb logcat -d -t 10000 > test-results/boot-logcat.txt 2>&1 || true
   echo "Android System UI did not reach a responsive launcher window after boot." >&2
   grep -E 'mCurrentFocus=|mFocusedApp=|System UI isn.t responding' test-results/boot-windows.txt | tail -n 40 >&2 || true
   exit 1
