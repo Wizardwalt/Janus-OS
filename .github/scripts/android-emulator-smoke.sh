@@ -19,6 +19,23 @@ test "$boot_complete" = "1"
 timeout 15 adb devices -l > test-results/adb-devices.txt 2>&1 || true
 timeout 15 adb shell getprop sys.boot_completed > test-results/boot-completed.txt 2>&1 || true
 
+# sys.boot_completed can precede SystemUI readiness by several minutes on TCG.
+# Do not launch Janus while the home window manager still has no focused window.
+home_ready=0
+for attempt in $(seq 1 60); do
+  timeout 15 adb shell dumpsys window windows > test-results/boot-windows.txt 2>&1 || true
+  if grep -E 'mCurrentFocus=Window\\{[^}]*com\\.android\\.launcher3' test-results/boot-windows.txt >/dev/null; then
+    home_ready=1
+    break
+  fi
+  sleep 5
+done
+if [[ "$home_ready" != "1" ]]; then
+  echo "Android System UI did not reach a responsive launcher window after boot." >&2
+  grep -E 'mCurrentFocus=|mFocusedApp=|System UI isn.t responding' test-results/boot-windows.txt | tail -n 40 >&2 || true
+  exit 1
+fi
+
 timeout 60 adb install -r app/build/outputs/apk/debug/app-debug.apk > test-results/install.txt 2>&1
 timeout 30 adb shell am force-stop "$PACKAGE"
 timeout 45 adb shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 > test-results/monkey-launch.txt 2>&1 || true
