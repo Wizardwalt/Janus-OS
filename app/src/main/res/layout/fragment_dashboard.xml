@@ -31,7 +31,7 @@
             android:id="@+id/tv_root"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  ROOT:     CHECKING..."
+            android:text="  ROOT CHECK: CHECKING COMMON PATHS..."
             android:textColor="#00FF41"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -126,7 +126,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  CYBER WARFARE:     32"
+            android:text="  CYBER WARFARE:     31"
             android:textColor="#9D00FF"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -135,7 +135,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  SIGINT:             32"
+            android:text="  SIGINT:             31"
             android:textColor="#9D00FF"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -162,7 +162,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  TITAN EXCLUSIVE:    32"
+            android:text="  TITAN EXCLUSIVE:    31"
             android:textColor="#9D00FF"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -190,7 +190,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  PANDORA MK.1:   SCANNING..."
+            android:text="  PLANNED MK.1:   RP2040 USB Glitcher"
             android:textColor="#444444"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -199,7 +199,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  PANDORA OMEGA:  SCANNING..."
+            android:text="  PLANNED OMEGA:  Radxa CM5 Cyberdeck"
             android:textColor="#444444"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -208,7 +208,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  PANDORA TITAN:  SCANNING..."
+            android:text="  PLANNED TITAN:  Forearm display concept"
             android:textColor="#444444"
             android:fontFamily="monospace"
             android:textSize="13sp"
