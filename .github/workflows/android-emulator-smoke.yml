@@ -65,3 +65,172 @@ jobs:
           path: test-results/
           if-no-files-found: warn
           retention-days: 14
+
+  # These read-only cross-project checks run after the emulator job so their
+  # compilers do not compete with the software AVD. Pinned SHAs make the
+  # verification reproducible while the individual repositories' runners fail
+  # before job startup.
+  cross-project-android:
+    if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 74 }}
+    needs: emulator-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out OmniVault PR #27
+        uses: actions/checkout@v4
+        with:
+          repository: Wizardwalt/OmniVault-Android
+          ref: 4e2a475859038f3063fc7778750ea965ee6ecdcb
+          path: verify/omnivault-pr27
+
+      - name: Check out OmniVault PR #28
+        uses: actions/checkout@v4
+        with:
+          repository: Wizardwalt/OmniVault-Android
+          ref: 8bfbfb6c2ae506c7e84ec77871976fa63246bd16
+          path: verify/omnivault-pr28
+
+      - name: Check out OmniVault PR #29
+        uses: actions/checkout@v4
+        with:
+          repository: Wizardwalt/OmniVault-Android
+          ref: 201ce5795e8a189b8aeabc416cebff74e3646f22
+          path: verify/omnivault-pr29
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.4
+
+      - name: Install Android platform and build tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-37.2" "build-tools;36.0.0"
+
+      - name: Install Gradle 9.6.0
+        run: |
+          curl -fsSLo /tmp/gradle.zip https://services.gradle.org/distributions/gradle-9.6.0-bin.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          echo "/tmp/gradle-9.6.0/bin" >> "$GITHUB_PATH"
+
+      - name: Run OmniVault unit tests, Android-test compilation, and APK builds
+        run: |
+          set -euo pipefail
+          for project in verify/omnivault-pr27 verify/omnivault-pr28 verify/omnivault-pr29; do
+            echo "=== Verifying $project ==="
+            (
+              cd "$project"
+              gradle --no-daemon :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:assembleDebug
+            )
+          done
+
+  cross-project-backend:
+    if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 74 }}
+    needs: emulator-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out Janus Community PR #26
+        uses: actions/checkout@v4
+        with:
+          repository: Wizardwalt/janus-community
+          ref: f5c3550b9e61ee5c7c5787784362211978a5e61f
+          path: verify/community-pr26
+
+      - name: Check out Janus Community PR #27
+        uses: actions/checkout@v4
+        with:
+          repository: Wizardwalt/janus-community
+          ref: af7f1bb9ce0a288de544bb5496c3fefa8ee01fa1
+          path: verify/community-pr27
+
+      - name: Check out Society PR #25
+        uses: actions/checkout@v4
+        with:
+          repository: Wizardwalt/multicolored-hat-society
+          ref: 8e6287526ac378ea1f23aba1fc73a42a7ebc1201
+          path: verify/society-pr25
+
+      - name: Check out Society PR #26
+        uses: actions/checkout@v4
+        with:
+          repository: Wizardwalt/multicolored-hat-society
+          ref: f819221d11bdff9fe89079dafd116a2c3940938e
+          path: verify/society-pr26
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check and test Community/Society backends
+        run: |
+          set -euo pipefail
+          for backend in \
+            verify/community-pr26/backend \
+            verify/community-pr27/backend \
+            verify/society-pr25/backend \
+            verify/society-pr26/backend; do
+            echo "=== Verifying $backend ==="
+            (
+              cd "$backend"
+              cargo fmt --all -- --check
+              cargo clippy --all-targets -- -D warnings
+              cargo test --all-targets
+              cargo build --release
+            )
+          done
+
+      - name: Validate Community and Society static sites
+        run: |
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+
+          class Checker(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.html = self.head = self.body = self.title = False
+              def handle_starttag(self, tag, attrs):
+                  if tag == "html": self.html = True
+                  if tag == "head": self.head = True
+                  if tag == "body": self.body = True
+                  if tag == "title": self.title = True
+
+          def check(path, markers):
+              page = Path(path, "index.html").read_text(encoding="utf-8")
+              parser = Checker()
+              parser.feed(page)
+              assert parser.html and parser.head and parser.body and parser.title, path
+              for marker in markers:
+                  assert marker in page, f"{path}: missing {marker}"
+
+          community = ("Janus Community", "feed-filter", "feed-list", "api-base", "app.js", "Public discussions")
+          society = ("Multicolored Hat Society", "profile-form", "discussion-form", "discussion-list", "localStorage", "textContent")
+          for path in ("verify/community-pr26", "verify/community-pr27"):
+              check(path, community)
+          for path in ("verify/society-pr25", "verify/society-pr26"):
+              check(path, society)
+          print("Community and Society static site checks passed")
+          PY
