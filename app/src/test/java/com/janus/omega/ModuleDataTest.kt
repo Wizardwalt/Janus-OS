@@ -10,7 +10,7 @@ class ModuleDataTest {
         val entries = ModuleData.categories.flatMap { it.second }
 
         assertEquals(8, ModuleData.categories.size)
-        assertEquals(257, entries.size)
+        assertEquals(260, entries.size)
         assertEquals(entries.size, entries.toSet().size)
         assertEquals(entries.size, ModuleData.totalEntries)
         assertTrue(ModuleData.categories.all { (_, modules) -> modules.isNotEmpty() })
