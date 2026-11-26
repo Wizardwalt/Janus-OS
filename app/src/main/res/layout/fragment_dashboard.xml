@@ -126,7 +126,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  CYBER WARFARE:     31"
+            android:text="  CYBER WARFARE:     32"
             android:textColor="#9D00FF"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -135,7 +135,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  SIGINT:             31"
+            android:text="  SIGINT:             32"
             android:textColor="#9D00FF"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -162,7 +162,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  TITAN EXCLUSIVE:    31"
+            android:text="  TITAN EXCLUSIVE:    32"
             android:textColor="#9D00FF"
             android:fontFamily="monospace"
             android:textSize="13sp"
