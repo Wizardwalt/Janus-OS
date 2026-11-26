@@ -19,12 +19,12 @@ adb devices -l > test-results/adb-devices.txt
 adb shell getprop sys.boot_completed > test-results/boot-completed.txt
 
 adb install -r app/build/outputs/apk/debug/app-debug.apk > test-results/install.txt 2>&1
-adb shell am force-stop "$PACKAGE"
-adb shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 > test-results/monkey-launch.txt 2>&1 || true
+timeout 30 adb shell am force-stop "$PACKAGE"
+timeout 45 adb shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 > test-results/monkey-launch.txt 2>&1 || true
 
 pid=""
 for attempt in $(seq 1 60); do
-  pid="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+  pid="$(timeout 15 adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
   if [[ -n "$pid" ]]; then
     break
   fi
@@ -34,8 +34,8 @@ done
 # Collect evidence before any assertion can terminate the job. In particular,
 # a crash immediately after launch must still leave logcat and activity state.
 printf '%s\n' "$pid" > test-results/pidof.txt
-adb shell dumpsys activity activities > test-results/activities.txt 2>&1 || true
-adb logcat -d -t 10000 > test-results/emulator-logcat.txt 2>&1 || true
+timeout 30 adb shell dumpsys activity activities > test-results/activities.txt 2>&1 || true
+timeout 30 adb logcat -d -t 10000 > test-results/emulator-logcat.txt 2>&1 || true
 
 if [[ -z "$pid" ]]; then
   echo "Janus process did not remain alive after launcher invocation." >&2
