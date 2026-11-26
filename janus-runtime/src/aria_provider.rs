@@ -371,6 +371,15 @@ fn validate_endpoint(endpoint: &Url) -> Result<()> {
     }
 }
 
+#[cfg(unix)]
+fn validate_provider_key_owner(file_uid: u32, runtime_uid: u32) -> Result<()> {
+    ensure!(
+        file_uid == runtime_uid,
+        "Aria provider key file must be owned by the runtime user"
+    );
+    Ok(())
+}
+
 fn read_private_api_key(path: &Path) -> Result<String> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -404,7 +413,8 @@ fn read_private_api_key(path: &Path) -> Result<String> {
         "Aria provider key file must contain 1..=4096 bytes");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        validate_provider_key_owner(metadata.uid(), unsafe { libc::geteuid() })?;
         ensure!(metadata.permissions().mode() & 0o077 == 0,
             "Aria provider key file permissions must be owner-only (0600)");
     }
@@ -713,6 +723,13 @@ mod tests {
                 "unexpected error for role {role}: {error}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_api_key_file_requires_runtime_user_ownership() {
+        assert!(validate_provider_key_owner(1000, 1000).is_ok());
+        assert!(validate_provider_key_owner(1001, 1000).is_err());
     }
 
     #[cfg(target_os = "linux")]
