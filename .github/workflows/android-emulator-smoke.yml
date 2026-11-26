@@ -75,6 +75,8 @@ jobs:
     needs: emulator-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      ANDROID_I_WANT_MY_TCG: "yes"
     steps:
       - name: "Check out OmniVault PR #27"
         uses: actions/checkout@v4
@@ -126,6 +128,35 @@ jobs:
               gradle --no-daemon :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:assembleDebug
             )
           done
+
+      - name: Run Aria share instrumentation tests on Android emulator
+        uses: ReactiveCircus/android-emulator-runner@v2.34.0
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          cores: 4
+          ram-size: 4096M
+          heap-size: 512M
+          emulator-boot-timeout: 900
+          force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            home_ready=0
+            for attempt in $(seq 1 60); do
+              timeout 5 adb shell dumpsys window windows > /tmp/omnivault-boot-windows.txt 2>&1 || true
+              if grep -F 'mCurrentFocus=Window{' /tmp/omnivault-boot-windows.txt | grep -Fq 'com.android.launcher3'; then
+                home_ready=1
+                break
+              fi
+              sleep 5
+            done
+            test "$home_ready" = "1"
+            cd verify/omnivault-pr28
+            gradle --no-daemon :app:connectedDebugAndroidTest
 
   cross-project-backend:
     if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 74 }}
