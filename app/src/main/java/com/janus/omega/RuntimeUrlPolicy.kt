@@ -18,7 +18,11 @@ internal object RuntimeUrlPolicy {
         if (host.isBlank() || uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null) {
             return null
         }
-        if (uri.port !in -1..65535) return null
+        if (uri.port !in -1..65535 || uri.port == 0) return null
+        // Runtime API calls are rooted at location.origin. Reject sub-path
+        // deployments rather than silently sending authenticated requests to
+        // the wrong application root.
+        if (!uri.rawPath.isNullOrEmpty() && uri.rawPath != "/") return null
 
         if (scheme == "http") {
             val loopback = host in setOf("localhost", "127.0.0.1", "::1")
