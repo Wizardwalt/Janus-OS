@@ -76,21 +76,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Check out OmniVault PR #27
+      - name: "Check out OmniVault PR #27"
         uses: actions/checkout@v4
         with:
           repository: Wizardwalt/OmniVault-Android
           ref: 4e2a475859038f3063fc7778750ea965ee6ecdcb
           path: verify/omnivault-pr27
 
-      - name: Check out OmniVault PR #28
+      - name: "Check out OmniVault PR #28"
         uses: actions/checkout@v4
         with:
           repository: Wizardwalt/OmniVault-Android
           ref: 8bfbfb6c2ae506c7e84ec77871976fa63246bd16
           path: verify/omnivault-pr28
 
-      - name: Check out OmniVault PR #29
+      - name: "Check out OmniVault PR #29"
         uses: actions/checkout@v4
         with:
           repository: Wizardwalt/OmniVault-Android
@@ -151,28 +151,28 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       CARGO_TERM_COLOR: always
     steps:
-      - name: Check out Janus Community PR #26
+      - name: "Check out Janus Community PR #26"
         uses: actions/checkout@v4
         with:
           repository: Wizardwalt/janus-community
           ref: f5c3550b9e61ee5c7c5787784362211978a5e61f
           path: verify/community-pr26
 
-      - name: Check out Janus Community PR #27
+      - name: "Check out Janus Community PR #27"
         uses: actions/checkout@v4
         with:
           repository: Wizardwalt/janus-community
           ref: af7f1bb9ce0a288de544bb5496c3fefa8ee01fa1
           path: verify/community-pr27
 
-      - name: Check out Society PR #25
+      - name: "Check out Society PR #25"
         uses: actions/checkout@v4
         with:
           repository: Wizardwalt/multicolored-hat-society
           ref: 8e6287526ac378ea1f23aba1fc73a42a7ebc1201
           path: verify/society-pr25
 
-      - name: Check out Society PR #26
+      - name: "Check out Society PR #26"
         uses: actions/checkout@v4
         with:
           repository: Wizardwalt/multicolored-hat-society
