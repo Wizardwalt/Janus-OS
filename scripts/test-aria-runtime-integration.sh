@@ -163,6 +163,9 @@ JSON
 cat > "$TMP_DIR/message.json" <<JSON
 {"event_id":"ov_ci_snapshot_0001_0000","role":"user","content":"$SENTINEL","provider":"OmniVault / CI fixture","model":null,"created_at":"2026-11-20T10:01:00Z"}
 JSON
+cat > "$TMP_DIR/assistant.json" <<JSON
+{"event_id":"ov_ci_snapshot_0002_0000","role":"assistant","content":"Synthetic assistant reply from the imported conversation.","provider":"OmniVault / CI fixture","model":null,"created_at":"2026-11-20T10:02:00Z"}
+JSON
 
 code="$(http_code POST "$BASE/aria/conversations/$CONVERSATION_ID/events" "$OWNER_TOKEN" "$TMP_DIR/response.json" \
   --data-binary @"$TMP_DIR/metadata.json")"
@@ -172,8 +175,12 @@ code="$(http_code POST "$BASE/aria/conversations/$CONVERSATION_ID/events" "$OWNE
   --data-binary @"$TMP_DIR/message.json")"
 assert_code "$code" 201 "import synthetic conversation message"
 
+code="$(http_code POST "$BASE/aria/conversations/$CONVERSATION_ID/events" "$OWNER_TOKEN" "$TMP_DIR/response.json" \
+  --data-binary @"$TMP_DIR/assistant.json")"
+assert_code "$code" 201 "import synthetic assistant reply"
+
 # Deterministic event IDs make a retry safe: duplicate writes are rejected and
-# the stored transcript remains exactly two events.
+# the stored transcript remains exactly three events.
 code="$(http_code POST "$BASE/aria/conversations/$CONVERSATION_ID/events" "$OWNER_TOKEN" "$TMP_DIR/response.json" \
   --data-binary @"$TMP_DIR/message.json")"
 assert_code "$code" 400 "duplicate event retry is rejected"
@@ -181,11 +188,13 @@ assert_code "$code" 400 "duplicate event retry is rejected"
 code="$(http_code GET "$BASE/aria/conversations/$CONVERSATION_ID/events?limit=1000" "$OWNER_TOKEN" "$TMP_DIR/response.json")"
 assert_code "$code" 200 "owner reads imported transcript"
 jq -e --arg sentinel "$SENTINEL" '
-  .status == "success" and (.data | length == 2) and
+  .status == "success" and (.data | length == 3) and
   .data[0].event_id == "ov_ci_snapshot_0000_0000" and
   .data[1].event_id == "ov_ci_snapshot_0001_0000" and
   .data[1].content == $sentinel and
-  .data[1].created_at == "2026-11-20T10:01:00Z"
+  .data[1].created_at == "2026-11-20T10:01:00Z" and
+  .data[2].event_id == "ov_ci_snapshot_0002_0000" and
+  .data[2].role == "assistant"
 ' "$TMP_DIR/response.json" >/dev/null
 
 # Exercise cursor pagination used by the Android importer.
@@ -217,7 +226,7 @@ import sqlite3, sys
 path, sentinel = sys.argv[1], sys.argv[2].encode()
 db = sqlite3.connect(path)
 rows = db.execute("SELECT nonce, ciphertext FROM aria_conversation_events").fetchall()
-assert len(rows) == 2, f"expected 2 encrypted events, found {len(rows)}"
+assert len(rows) == 3, f"expected 3 encrypted events, found {len(rows)}"
 assert all(sentinel not in bytes(nonce) + bytes(ciphertext) for nonce, ciphertext in rows), "plaintext sentinel found in ciphertext columns"
 with open(path, "rb") as handle:
     contents = handle.read()
@@ -235,7 +244,7 @@ assert_code "$code" 200 "owner can authenticate after runtime restart"
 OWNER_TOKEN="$(jq -r '.data.session_token' "$TMP_DIR/response.json")"
 code="$(http_code GET "$BASE/aria/conversations/$CONVERSATION_ID/events?limit=1000" "$OWNER_TOKEN" "$TMP_DIR/response.json")"
 assert_code "$code" 200 "encrypted conversation survives runtime restart"
-jq -e --arg sentinel "$SENTINEL" '.data | length == 2 and .[1].content == $sentinel' "$TMP_DIR/response.json" >/dev/null
+jq -e --arg sentinel "$SENTINEL" '.data | length == 3 and .[1].content == $sentinel and .[2].role == "assistant"' "$TMP_DIR/response.json" >/dev/null
 
 # Restart without the data key. Conversation APIs must fail closed instead of
 # silently creating plaintext storage or returning an empty successful result.
