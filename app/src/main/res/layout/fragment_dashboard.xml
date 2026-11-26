@@ -182,7 +182,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="&#9484;&#9472; PANDORA LINK &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;"
+            android:text="&#9484;&#9472; PLANNED HARDWARE &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;"
             android:textColor="#00FF41"
             android:fontFamily="monospace"
             android:textSize="13sp" />
