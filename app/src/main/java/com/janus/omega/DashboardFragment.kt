@@ -26,7 +26,7 @@ class DashboardFragment : Fragment() {
 
         val rooted = isDeviceRooted()
         view.findViewById<TextView>(R.id.tv_root).apply {
-            text = if (rooted) "  ROOT:    GRANTED" else "  ROOT:    DENIED"
+            text = if (rooted) "  ROOT CHECK: COMMON su PATH DETECTED" else "  ROOT CHECK: NO COMMON su PATH FOUND"
             setTextColor(if (rooted) 0xFF00FF41.toInt() else 0xFFFF4444.toInt())
         }
 
@@ -38,7 +38,9 @@ class DashboardFragment : Fragment() {
         view.findViewById<TextView>(R.id.tv_wifi).text = "  WI-FI:   $wifiState"
 
         view.findViewById<TextView>(R.id.tv_modules).text =
-            "  MODULES: 1,233 LOADED"
+            "  MODULES: 0 EXECUTABLE / ${ModuleData.totalEntries} CATALOGED"
+        view.findViewById<TextView>(R.id.tv_catalog_total).text =
+            "  CATALOG ENTRIES: ${ModuleData.totalEntries}"
     }
 
     private fun isDeviceRooted(): Boolean {
