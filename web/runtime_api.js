@@ -63,6 +63,8 @@ class JanusRuntimeApi {
   setState(namespace, key, value) { return this.request(`/state/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`, { method: 'POST', body: JSON.stringify(value) }); }
   plugins() { return this.request('/plugins'); }
   hardwareStatus() { return this.request('/hardware/status'); }
+  usbDevices() { return this.request('/hardware/usb/devices'); }
+  serialPorts() { return this.request('/hardware/serial/ports'); }
 
   // Aria knowledge, encrypted history, and provider-backed chat APIs. The
   // legacy WebSocket path remains explicitly labeled as scripted demo mode.
