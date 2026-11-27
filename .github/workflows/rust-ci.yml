@@ -72,7 +72,7 @@ jobs:
 
       - name: Check browser JavaScript syntax
         run: |
-          for f in web/app.js web/aria*.js web/runtime_*.js; do
+          for f in web/app.js web/aria*.js web/runtime_*.js web/device_service_center.js; do
             [ -f "$f" ] || continue
             echo "Checking $f"
             node --check "$f"
