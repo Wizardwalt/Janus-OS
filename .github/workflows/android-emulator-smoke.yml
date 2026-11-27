@@ -81,6 +81,7 @@ jobs:
       - name: "Check out OmniVault PR #27"
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.CROSS_PROJECT_READ_TOKEN || github.token }}
           repository: Wizardwalt/OmniVault-Android
           ref: 4e2a475859038f3063fc7778750ea965ee6ecdcb
           path: verify/omnivault-pr27
@@ -88,6 +89,7 @@ jobs:
       - name: "Check out OmniVault PR #28"
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.CROSS_PROJECT_READ_TOKEN || github.token }}
           repository: Wizardwalt/OmniVault-Android
           ref: 8bfbfb6c2ae506c7e84ec77871976fa63246bd16
           path: verify/omnivault-pr28
@@ -95,6 +97,7 @@ jobs:
       - name: "Check out OmniVault PR #29"
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.CROSS_PROJECT_READ_TOKEN || github.token }}
           repository: Wizardwalt/OmniVault-Android
           ref: 201ce5795e8a189b8aeabc416cebff74e3646f22
           path: verify/omnivault-pr29
@@ -184,6 +187,7 @@ jobs:
       - name: "Check out Janus Community PR #26"
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.CROSS_PROJECT_READ_TOKEN || github.token }}
           repository: Wizardwalt/janus-community
           ref: f5c3550b9e61ee5c7c5787784362211978a5e61f
           path: verify/community-pr26
@@ -191,6 +195,7 @@ jobs:
       - name: "Check out Janus Community PR #27"
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.CROSS_PROJECT_READ_TOKEN || github.token }}
           repository: Wizardwalt/janus-community
           ref: af7f1bb9ce0a288de544bb5496c3fefa8ee01fa1
           path: verify/community-pr27
@@ -198,6 +203,7 @@ jobs:
       - name: "Check out Society PR #25"
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.CROSS_PROJECT_READ_TOKEN || github.token }}
           repository: Wizardwalt/multicolored-hat-society
           ref: 8e6287526ac378ea1f23aba1fc73a42a7ebc1201
           path: verify/society-pr25
@@ -205,6 +211,7 @@ jobs:
       - name: "Check out Society PR #26"
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.CROSS_PROJECT_READ_TOKEN || github.token }}
           repository: Wizardwalt/multicolored-hat-society
           ref: f819221d11bdff9fe89079dafd116a2c3940938e
           path: verify/society-pr26
