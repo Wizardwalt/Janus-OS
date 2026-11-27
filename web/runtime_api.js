@@ -65,6 +65,8 @@ class JanusRuntimeApi {
   hardwareStatus() { return this.request('/hardware/status'); }
   usbDevices() { return this.request('/hardware/usb/devices'); }
   serialPorts() { return this.request('/hardware/serial/ports'); }
+  thermalSensors() { return this.request('/hardware/thermal/sensors'); }
+  memoryInventory() { return this.request('/hardware/memory'); }
 
   // Aria knowledge, encrypted history, and provider-backed chat APIs. The
   // legacy WebSocket path remains explicitly labeled as scripted demo mode.
