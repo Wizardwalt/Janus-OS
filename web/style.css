@@ -411,3 +411,23 @@ html, body { width:100%; height:100%; background:var(--bg); color:var(--text); f
   color: var(--text3);
   font-size: .58rem;
 }
+
+/* Janus Device Service Center */
+.device-service-tile { border-color:rgba(0,170,255,.55); background:linear-gradient(135deg,var(--panel),rgba(0,170,255,.08)); }
+.device-service-tile:hover { border-color:var(--blue); box-shadow:0 4px 20px rgba(0,170,255,.18); }
+.device-service-view { padding:18px; overflow:auto; height:calc(100% - 48px); color:var(--text); }
+.device-service-toolbar { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:16px; }
+.device-service-toolbar button { border:1px solid var(--border2); background:var(--panel2); color:var(--text); padding:9px 14px; border-radius:6px; font:inherit; cursor:pointer; }
+.device-service-toolbar button:disabled { opacity:.5; cursor:not-allowed; }
+.device-service-notice { border:1px solid rgba(255,136,0,.45); background:rgba(255,136,0,.07); color:#ffd29a; padding:12px; border-radius:8px; margin-bottom:16px; font-size:.68rem; line-height:1.6; }
+.device-service-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }
+.device-service-card { background:var(--panel); border:1px solid var(--border); border-radius:9px; padding:14px; min-width:0; }
+.device-service-card h3 { color:var(--blue); font-size:.78rem; letter-spacing:.08em; margin-bottom:10px; }
+.device-service-metric { font-size:1.8rem; color:var(--text); margin:4px 0; }
+.device-service-muted { color:var(--text3); font-size:.64rem; line-height:1.6; overflow-wrap:anywhere; }
+.device-service-list { display:grid; gap:8px; margin-top:10px; }
+.device-service-device { border-top:1px solid var(--border); padding-top:8px; font-size:.68rem; line-height:1.6; overflow-wrap:anywhere; }
+.device-service-state { color:var(--green); }
+.device-service-state.unavailable { color:var(--orange); }
+.device-service-error { color:#ff9b9b; font-size:.65rem; margin-top:8px; }
+@media(max-width:600px) { .device-service-view { padding:12px; } .device-service-toolbar { align-items:stretch; } }
