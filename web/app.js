@@ -561,6 +561,7 @@ function updateOpsCount() {
 
 // ─── App tiles ─────────────────────────────────────────────────────────────────
 function openApp(category, label) {
+  if (category === 'device_service_center') { openDeviceServiceCenter(); return; }
   if (category === 'aria_avatar' || category === 'aria_chat') { openAriaView(); return; }
   currentCategory = category;
   document.getElementById('launcher').classList.add('hidden');
