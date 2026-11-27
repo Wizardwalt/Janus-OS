@@ -24,7 +24,7 @@ timeout 15 adb shell getprop sys.boot_completed > test-results/boot-completed.tx
 home_ready=0
 for attempt in $(seq 1 60); do
   timeout 5 adb shell dumpsys window windows > test-results/boot-windows.txt 2>&1 || true
-  if grep -E 'mCurrentFocus=Window\\{|imeLayeringTarget in display#[0-9]+ Window\\{' test-results/boot-windows.txt | grep -Fq 'com.android.launcher3'; then
+  if grep -E 'mCurrentFocus=Window\\{|imeLayeringTarget in display#[[:space:]]*[0-9]+ Window\\{' test-results/boot-windows.txt | grep -Fq 'com.android.launcher3'; then
     home_ready=1
     break
   fi
