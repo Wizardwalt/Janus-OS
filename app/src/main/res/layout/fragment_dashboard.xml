@@ -21,7 +21,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  STATUS:   ARMORED"
+            android:text="  APP STATUS: RUNNING"
             android:textColor="#00FF41"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -31,7 +31,7 @@
             android:id="@+id/tv_root"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  ROOT:     CHECKING..."
+            android:text="  ROOT CHECK: CHECKING COMMON PATHS..."
             android:textColor="#00FF41"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -81,7 +81,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="&#9484;&#9472; TACTICAL MODULES &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;"
+            android:text="&#9484;&#9472; MODULE CATALOG :: REFERENCE ONLY &#9488;"
             android:textColor="#9D00FF"
             android:fontFamily="monospace"
             android:textSize="13sp" />
@@ -89,7 +89,8 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  TOTAL LOADED:     1,233"
+            android:id="@+id/tv_catalog_total"
+            android:text="  CATALOG ENTRIES:  0"
             android:textColor="#9D00FF"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -181,7 +182,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="&#9484;&#9472; PANDORA LINK &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;"
+            android:text="&#9484;&#9472; PLANNED HARDWARE &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;"
             android:textColor="#00FF41"
             android:fontFamily="monospace"
             android:textSize="13sp" />
@@ -189,7 +190,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  PANDORA MK.1:   SCANNING..."
+            android:text="  PLANNED MK.1:   RP2040 USB Glitcher"
             android:textColor="#444444"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -198,7 +199,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  PANDORA OMEGA:  SCANNING..."
+            android:text="  PLANNED OMEGA:  Radxa CM5 Cyberdeck"
             android:textColor="#444444"
             android:fontFamily="monospace"
             android:textSize="13sp"
@@ -207,7 +208,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="  PANDORA TITAN:  SCANNING..."
+            android:text="  PLANNED TITAN:  Forearm display concept"
             android:textColor="#444444"
             android:fontFamily="monospace"
             android:textSize="13sp"

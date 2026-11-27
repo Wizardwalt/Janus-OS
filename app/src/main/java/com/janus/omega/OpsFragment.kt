@@ -20,12 +20,18 @@ class OpsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        view.findViewById<TextView>(R.id.catalog_header).text =
+            "  MODULE CATALOG :: ${ModuleData.totalEntries} ENTRIES :: REFERENCE ONLY"
         val listView = view.findViewById<ExpandableListView>(R.id.module_list)
         val adapter = ModuleListAdapter(requireContext(), ModuleData.categories)
         listView.setAdapter(adapter)
         listView.setOnChildClickListener { _, _, groupPos, childPos, _ ->
             val module = ModuleData.categories[groupPos].second[childPos]
-            Toast.makeText(requireContext(), "EXECUTING: $module", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                requireContext(),
+                "CATALOG ONLY: $module has no execution adapter.",
+                Toast.LENGTH_LONG
+            ).show()
             true
         }
     }

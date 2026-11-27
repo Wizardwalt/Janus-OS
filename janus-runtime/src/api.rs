@@ -1038,6 +1038,10 @@ async fn aria_conversation_export(
     }))
 }
 
+fn external_conversation_role_is_allowed(role: &str) -> bool {
+    matches!(role, "user" | "assistant")
+}
+
 async fn aria_conversation_append(
     AxumState(state): AxumState<ApiState>,
     headers: HeaderMap,
@@ -1048,6 +1052,15 @@ async fn aria_conversation_append(
         Ok(account) => account,
         Err(error) => return unauthorized_response(error),
     };
+    if !external_conversation_role_is_allowed(&request.role) {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            status: "error".into(),
+            data: None,
+            error: Some(
+                "externally appended conversation events may only use user or assistant roles".into(),
+            ),
+        }));
+    }
     let _turn_guard = state.aria_chat_lock.lock().await;
     let event = ConversationEvent {
         event_id: request.event_id,

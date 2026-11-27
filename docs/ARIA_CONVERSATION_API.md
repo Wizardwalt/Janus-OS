@@ -1,6 +1,6 @@
 # Aria Authenticated Conversation API
 
-**Status:** Encrypted conversation storage, authenticated runtime endpoints, an OpenAI-compatible provider adapter, and browser chat/history controls are implemented in this branch. Live inference requires a configured provider and protected data key.
+**Status:** Encrypted conversation storage, authenticated runtime endpoints, OpenAI-compatible and native Anthropic provider adapters, and browser chat/history controls are implemented in this branch. Live inference requires a configured provider and protected data key.
 
 ## Encrypted storage and key configuration
 
@@ -18,7 +18,7 @@ Without the key, the runtime does not silently fall back to plaintext conversati
 
 ## Model provider configuration
 
-The runtime supports an OpenAI-compatible Chat Completions endpoint. Configure both:
+The runtime supports an OpenAI-compatible Chat Completions endpoint by default. Configure both:
 
 ```sh
 JANUS_ARIA_PROVIDER_CHAT_COMPLETIONS_URL=https://provider.example/v1/chat/completions
@@ -27,7 +27,19 @@ JANUS_ARIA_PROVIDER_NAME=provider-label
 JANUS_ARIA_PROVIDER_API_KEY_FILE=/absolute/path/to/provider-api-key
 ```
 
-The provider name and API-key file are optional; endpoint and model must be configured together. The API-key file, when used, must be a regular non-symlink file, 1..=4096 bytes, and owner-only (0600) on Unix. Keep it on the runtime host; it is never sent to the browser or stored in conversation history.
+The provider name and API-key file are optional; endpoint and model must be configured together. The API-key file, when used, must be a regular non-symlink file, 1..=4096 bytes, owned by the Janus runtime user, and owner-only (0600) on Unix. Keep it on the runtime host; it is never sent to the browser or stored in conversation history.
+
+For the native Anthropic Messages API, set the provider kind and model/key-file pair instead:
+
+```sh
+JANUS_ARIA_PROVIDER_KIND=anthropic
+JANUS_ARIA_ANTHROPIC_MODEL=your-model-id
+JANUS_ARIA_ANTHROPIC_API_KEY_FILE=/absolute/path/to/anthropic-api-key
+# Optional override; defaults to https://api.anthropic.com/v1/messages
+JANUS_ARIA_ANTHROPIC_MESSAGES_URL=https://api.anthropic.com/v1/messages
+```
+
+The Anthropic key file must be a regular non-symlink file owned by the Janus runtime user, with owner-only permissions (0600) on Unix. The default provider kind is `openai-compatible`; partial provider configuration fails closed.
 
 HTTPS is required for remote providers. Plain HTTP is accepted only for loopback providers such as a local Ollama-compatible service. Redirects are disabled, connection timeout is 10 seconds, request timeout is 60 seconds, and provider responses are capped at 2 MiB. No provider is selected or configured by this repository.
 
@@ -66,7 +78,7 @@ The runtime derives the owner ID from the authenticated account. No endpoint acc
 
 - `GET /aria/status` — report provider, encrypted-history, and private-memory readiness without exposing credentials.\n- `GET /aria/conversations?limit=20` — list the authenticated user's conversations (maximum 100).
 - `GET /aria/conversations/{conversation_id}/events?limit=100` — read that owner's events (maximum 1,000).
-- `POST /aria/conversations/{conversation_id}/events` — append an event. The conversation is created on first append.
+- `POST /aria/conversations/{conversation_id}/events` — append an owner-scoped user or assistant event. External clients cannot append privileged system/tool events. The conversation is created on first append.
 - `DELETE /aria/conversations/{conversation_id}` — delete that owner's conversation and cascade-delete its events.
 
 Append request example:
@@ -81,7 +93,7 @@ Append request example:
 }
 ```
 
-`created_at` is optional and defaults to the runtime's current UTC time. Roles are restricted by the storage layer to `system`, `user`, `assistant`, or `tool`. Event IDs are unique within an owner namespace, not globally.
+`created_at` is optional and defaults to the runtime's current UTC time. The encrypted storage layer can represent `system`, `user`, `assistant`, or `tool` roles for runtime-owned chat turns, but the authenticated external append endpoint accepts only `user` and `assistant`. Event IDs are unique within an owner namespace, not globally.
 
 ## Remaining production gates
 
